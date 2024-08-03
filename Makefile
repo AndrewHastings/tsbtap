@@ -2,9 +2,12 @@
 # Copyright 2024 Andrew B. Hastings. All rights reserved.
 #
 
-OBJS = tsbtap.o
+CFLAGS=-g -fsanitize=address -Wno-trigraphs -Wunused-variable
 
-cdctap: $(OBJS)
+HDRS = outfile.h simtap.h tfilefmt.h tsbtap.h
+OBJS = outfile.o simtap.o tfilefmt.o tsbtap.o
+
+tsbtap: $(OBJS)
 	$(CC) $(CFLAGS) -o tsbtap $^
 
 clean:
@@ -12,3 +15,6 @@ clean:
 
 clobber:
 	$(RM) tsbtap $(OBJS)
+
+%.o : %.c $(HDRS)
+	$(CC) $(CFLAGS) -c $<
