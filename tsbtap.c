@@ -565,6 +565,11 @@ char *print_str_operand(FILE *fp, stmt_ctx_t *ctx, unsigned token)
 	int i, nread;
 	unsigned char c, tbuf[256];
 
+	if (len == 0) {
+		fprintf(fp, "\"\"");
+		return NULL;
+	}
+
 	/* consume even number of bytes */
 	nread = (len+1) & ~1;
 	if (stmt_getbytes(ctx, tbuf, nread) != nread)
@@ -714,7 +719,7 @@ char *print_other_operand(FILE *fp, stmt_ctx_t *ctx, unsigned token,
 char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname)
 {
 	stmt_ctx_t ctx;
-	int lineno;
+	int lineno, prev_lineno = 0;
 	char *err = NULL;
 	FILE *fp;
 
@@ -722,22 +727,30 @@ char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname)
 	if (!fp)
 		return "";
 
+	dprint(("extract_program: %s\n", fn));
+
 	while ((lineno = stmt_init(&ctx, tfile)) >= 0) {
-		unsigned char tbuf[256];
+		unsigned char tbuf[512];
 		unsigned stmt = 0;
 		int nread;
 		char **opnames = is_access > 0 ? access_stmts : tsb2000c_ops;
 
 		dprint(("extract_program: line %d\n", lineno));
+		if (lineno > 9999 || lineno <= prev_lineno) {
+			err = "lines out of order";
+			stmt_fini(&ctx);
+			break;
+		}
 		fprintf(fp, "%d ", lineno);
+		prev_lineno = lineno;
 
 		while (stmt_getbytes(&ctx, tbuf, 2) == 2) {
 			unsigned token = BE16(tbuf);
 			unsigned op = (token >> 9) & 0x3f;
 			char *space, *name = opnames[op];
 
-			dprint(("extract_program: 0x%04x <%d,0%02o,0%o,0%o> @ 0x%lx\n",
-				token, token >> 15, op,
+			dprint(("extract_program: 0x%04x <%d,0%02o,0%o,0%o> "
+				"@ 0x%lx\n", token, token >> 15, op,
 				(token >> 4) & 0x1f, token & 0xf,
 				ftell(tfile->tfile_tap->tp_fp)));
 			space = name[0] && name[1] ? " " : "";
