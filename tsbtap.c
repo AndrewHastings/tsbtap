@@ -178,18 +178,31 @@ int print_direntry(unsigned char *dbuf, int prev_uid)
 	}
 
 	printf("%.6s %c%c%c %4d", name, type, mode, sanct, len);
+
 	if (verbose) {
 		unsigned adate = BE16(dbuf+10);
+
 		printf("  ");
 		print_date(adate >> 9, adate & 0x1ff);
+
 		if (verbose > 1)
 			printf(" flags=0x%04x", flags);
+
 		if (dbuf[4] & 0x80)
 			printf(" recsz=%d", BE16(dbuf+8));
+		if (type == 'A' && BE16(dbuf+16) == 0xffff) {
+			unsigned device = BE16(dbuf+18);
+
+			printf(" device=%c%c%d", 'A' + (device >> 10),
+					 'A' + ((device >> 5) & 0x1f),
+						       device & 0x1f);
+		}
+
 		if (flags & 0x800)
 			printf(" FCP");
 		if (flags & 0x2000)
 			printf(" PFA");
+
 		printf("\n");
 	} else
 		printf("\t");
@@ -250,27 +263,220 @@ int do_topt(TAPE *tap)
  */
 
 
-char *extract_ascii_file(tfile_ctx_t *tfile, char *fn, char *oname)
+void print_number(FILE *fp, unsigned char *buf)
 {
-	return "not extracting ASCII file";
+	double val;
+	int expt;
+
+	val = (((buf[0] & 0x7f) << 16) | (buf[1] << 8) | buf[2])
+							  / (1.0 * (1 << 23));
+	if (buf[0] & 0x80)
+		val = -val;
+	expt = buf[3] >> 1;
+	if (buf[3] & 1)
+		val /= 1 << (128-expt);
+	else
+		val *= 1 << expt;
+	/* TBD: eliminate 0 before decimal point */
+	fprintf(fp, "%G", val);
 }
 
 
-char *extract_basic_file(tfile_ctx_t *tfile, char *fn, char *oname)
+typedef struct {
+	tfile_ctx_t	*rec_ctx;
+	int		rec_nleft;	/* in bytes */
+	int		rec_pad;	/* in bytes */
+} rec_ctx_t;
+
+
+void rec_init(rec_ctx_t *ctx, tfile_ctx_t *tfile, int recsz)
 {
-#if 0
-		if (is_file || is_ascii) {
-			while (nread = tap_read(tap, buf, sizeof buf)) {
-				nwrite = fwrite(buf, 1, nread, fp);
-				if (nwrite != nread) {
-					perror(name);
-					exit(2);
-				}
-				len += nread;
+	assert(recsz <= 256);
+	assert(recsz > 0);
+
+	ctx->rec_ctx = tfile;
+	ctx->rec_nleft = 2 * recsz;
+	ctx->rec_pad = 512 - 2*recsz;
+}
+
+
+void rec_skip(rec_ctx_t *ctx)
+{
+	unsigned char buf[512];
+	int nskip, nread;
+
+	nskip = ctx->rec_nleft + ctx->rec_pad;
+	nread = tfile_getbytes(ctx->rec_ctx, buf, nskip);
+	if (nread != nskip)
+		dprint(("rec_skip: EOF at 0x%lx\n",
+			ftell(ctx->rec_ctx->tfile_tap->tp_fp)));
+	ctx->rec_nleft = 0;
+}
+
+
+/* returns number of bytes copied, -1 if EOF. nbytes must be even */
+int rec_getbytes(rec_ctx_t *ctx, unsigned char *buf, int nbytes)
+{
+	int nread;
+
+	assert((nbytes & 1) == 0);
+	nbytes = MIN(ctx->rec_nleft, nbytes);
+	nread = tfile_getbytes(ctx->rec_ctx, buf, nbytes);
+	if (nread != nbytes)
+		dprint(("rec_getbytes: EOF at 0x%lx\n",
+			ftell(ctx->rec_ctx->tfile_tap->tp_fp)));
+	if (nread < 0)
+		return nread;
+	ctx->rec_nleft -= nread;
+	return nread;
+}
+
+
+char *extract_ascii_file(tfile_ctx_t *tfile, char *fn, char *oname,
+			 unsigned char *dbuf)
+{
+	FILE *fp;
+	unsigned char buf[512];
+	char *err = NULL;
+	int rv = 0;
+
+	if (BE16(dbuf+16) == 0xffff) {
+		unsigned device = BE16(dbuf+18);
+
+		printf("%s: not extracting device %c%c%d\n", fn,
+		       'A' + (device >> 10), 'A' + ((device >> 5) & 0x1f),
+		       device & 0x1f);
+		return "";
+	}
+
+	fp = out_open(fn, "txt", oname);
+	if (!fp)
+		return "";
+
+	dprint(("extract_ascii_file: %s\n", fn));
+
+	while (rv >= 0) {
+		rec_ctx_t ctx;
+
+		rec_init(&ctx, tfile, 256);
+
+		while ((rv = rec_getbytes(&ctx, buf, 2)) == 2) {
+			int stlen, nbytes;
+
+			stlen = BE16(buf);
+			dprint(("extract_ascii_file: code %04x\n", stlen));
+
+			/* EOF marker or end-of-record */
+			if (stlen == 0xffff) {
+				rv = -1;
+				break;
 			}
+			if (stlen == 0xfffe)
+				break;
+
+			nbytes = (stlen+1) & ~1;
+			if (rec_getbytes(&ctx, buf, nbytes) != nbytes) {
+				err = "string extends past end of ASCII file";
+				break;
+			}
+
+			if (fwrite(buf, 1, stlen, fp) != stlen) {
+				perror(oname);
+				err = "";
+				break;
+			}
+
+			putc('\n', fp);
 		}
-#endif
-	return "not extracting BASIC-formatted file";
+
+		if (err)
+			break;
+
+		rec_skip(&ctx);
+	}
+
+	out_close(fp);
+	return err;
+}
+
+
+char *extract_basic_file(tfile_ctx_t *tfile, char *fn, char *oname,
+			 unsigned char *dbuf)
+{
+	FILE *fp;
+	unsigned char buf[512];
+	char *err = NULL;
+	int rv = 0;
+	int recsz = BE16(dbuf+8);
+
+	fp = out_open(fn, "csv", oname);
+	if (!fp)
+		return "";
+
+	dprint(("extract_basic_file: %s\n", fn));
+
+	while (rv >= 0) {
+		rec_ctx_t ctx;
+		char *sep = "";
+
+		rec_init(&ctx, tfile, recsz);
+
+		for ( ; (rv = rec_getbytes(&ctx, buf, 2)) == 2; sep = ",") {
+			int code, bits;
+
+			code = BE16(buf);
+			dprint(("extract_basic_file: code %04x\n", code));
+
+			/* EOF marker or end-of-record */
+			if (code == 0xffff) {
+				fprintf(fp, "%s END", sep);
+				break;
+			}
+			if (code == 0xfffe)
+				break;
+
+			/* string */
+			if (buf[0] == 0x02) {
+				int stlen = buf[1] & 0xff;
+
+				/* consume even number of bytes */
+				bits = (stlen+1) & ~1;
+				if (rec_getbytes(&ctx, buf, bits) != bits) {
+					err = "string extends past end of record";
+					break;
+				}
+				buf[stlen] = '\0';
+
+				/* TBD: handle embedded quote, null, newline */
+				fprintf(fp, "%s\"%s\"", sep, buf);
+				continue;
+			}
+
+			/* number */
+			bits = code & 0xc000;
+			if (bits != 0x8000 && bits != 0x4000 && code != 0) {
+				printf("unrecognized item 0x%04x\n", code);
+				err = "";
+				break;
+			}
+			if (rec_getbytes(&ctx, buf+2, 2) != 2) {
+				err = "number extends past end of record";
+				break;
+			}
+			fprintf(fp, "%s", sep);
+			print_number(fp, buf);
+		}
+
+		if (err)
+			break;
+
+		rec_skip(&ctx);
+		if (rv >= 0)
+			putc('\n', fp);
+	}
+
+	out_close(fp);
+	return err;
 }
 
 
@@ -457,8 +663,6 @@ char *print_other_operand(FILE *fp, stmt_ctx_t *ctx, unsigned token,
 	static char fns[] = "CTLTABLINSPATANATNEXPLOGABSSQRINTRNDSGNLENTYPTIM"
 			    "SINCOSBRKITMRECNUMPOSCHRUPSSYS?32ZERCONIDNINVTRN";
 	unsigned char tbuf[4];
-	double val;
-	int expt;
 	unsigned op =   (token >> 9) & 0x3f;
 	unsigned name = (token >> 4) & 0x1f;
 	unsigned type =  token       & 0xf;
@@ -467,16 +671,7 @@ char *print_other_operand(FILE *fp, stmt_ctx_t *ctx, unsigned token,
 	    case 0:			/* floating-point number */
 		if (stmt_getbytes(ctx, tbuf, 4) != 4)
 			return "number extends past end of statement";
-		val = (((tbuf[0] & 0x7f) << 16) | (tbuf[1] << 8) | tbuf[2])
-							/ (1.0 * (1 << 23));
-		if (tbuf[0] & 0x80)
-			val = -val;
-		expt = tbuf[3] >> 1;
-		if (tbuf[3] & 1)
-			val /= 1 << (128-expt);
-		else
-			val *= 1 << expt;
-		fprintf(fp, "%G", val);
+		print_number(fp, tbuf);
 		break;
 
 	    case 1: case 2:		/* not used */
@@ -602,16 +797,9 @@ next:
 
 int do_xopt(TAPE *tap, int argc, char **argv)
 {
-	int ec = 0;
+	int i, ec = 0;
 	ssize_t nread;
-	tfile_ctx_t tfile;
-	char *err, *fn;
 	unsigned char *tbuf;
-	unsigned char dbuf[24];
-	char nbuf[12], name[7], oname[28];
-	int i, nbytes;
-	unsigned adate, uid;
-	struct tm tm;
 	char *found;
 
 	found = alloca(argc);
@@ -621,13 +809,13 @@ int do_xopt(TAPE *tap, int argc, char **argv)
 	}
 	memset(found, 0, argc);
 
-	while (1) {
-		nread = tap_readblock(tap, (char **)&tbuf);
-		if (nread < 0) {
-			if (nread == -2)
-				ec = 2;
-			break;
-		}
+	while ((nread = tap_readblock(tap, (char **)&tbuf)) >= 0) {
+		unsigned char dbuf[24];
+		char *err, *fn;
+		char nbuf[12], name[7], oname[28];
+		unsigned uid;
+		int nbytes;
+		tfile_ctx_t tfile;
 
 		tfile_ctx_init(&tfile, tap, tbuf, nread);
 		nbytes = tfile_getbytes(&tfile, dbuf, 24);
@@ -661,18 +849,18 @@ int do_xopt(TAPE *tap, int argc, char **argv)
 		err = NULL;
 		oname[0] = '\0';
 
-		/* place in subdir if user did not specify id */
+		/* place in subdir if user didn't specify id */
 		if (!strchr(argv[i], '/')) {
 			strcat(nbuf, "/");
 			strcat(nbuf, fn);
 			fn = nbuf;
 		}
 
-		/* write file */
+		/* extract file */
 		if (is_access > 0 && (dbuf[2] & 0x80))
-			err = extract_ascii_file(&tfile, fn, oname);
+			err = extract_ascii_file(&tfile, fn, oname, dbuf);
 		else if (dbuf[4] & 0x80)
-			err = extract_basic_file(&tfile, fn, oname);
+			err = extract_basic_file(&tfile, fn, oname, dbuf);
 		else if (dbuf[6] & 0x80)
 			err = "not extracting CSAVEd program";
 		else
@@ -680,7 +868,9 @@ int do_xopt(TAPE *tap, int argc, char **argv)
 
 		/* get access time from directory entry */
 		if (oname[0]) {
-			adate = BE16(dbuf+10);
+			struct tm tm;
+			unsigned adate = BE16(dbuf+10);
+
 			if (jdate_to_tm(adate >> 9, adate & 0x1ff, &tm) >= 0)
 				set_mtime(oname, &tm);
 		}
@@ -688,13 +878,16 @@ int do_xopt(TAPE *tap, int argc, char **argv)
 		if (err) {
 			ec = 2;
 			if (err[0])
-				fprintf(stderr, "%s: %s\n", fn, err);
+				printf("%s: %s\n", fn, err);
 		}
 
 next:
 		tfile_skipf(&tfile);
 		tfile_ctx_fini(&tfile);
 	}
+
+	if (nread == -2)
+		ec = 2;
 
 	for (i = 0; i < argc; i++)
 		if (!found[i]) {
