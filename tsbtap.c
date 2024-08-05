@@ -8,6 +8,7 @@
  */
 
 #include <inttypes.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -274,9 +275,9 @@ void print_number(FILE *fp, unsigned char *buf)
 		val = -val;
 	expt = buf[3] >> 1;
 	if (buf[3] & 1)
-		val /= 1 << (128-expt);
+		val /= pow(2, 128-expt);
 	else
-		val *= 1 << expt;
+		val *= pow(2, expt);
 	/* TBD: eliminate 0 before decimal point */
 	fprintf(fp, "%G", val);
 }
