@@ -4,8 +4,8 @@
 
 CFLAGS=-g -fsanitize=address -Wno-trigraphs -Wunused-variable
 
-HDRS = outfile.h simtap.h tfilefmt.h tsbtap.h
-OBJS = outfile.o simtap.o tfilefmt.o tsbtap.o
+HDRS = outfile.h simtap.h tfilefmt.h tsbfile.h tsbprog.h tsbtap.h
+OBJS = outfile.o simtap.o tfilefmt.o tsbfile.o tsbprog.o tsbtap.o
 LIBS = -lm
 
 tsbtap: $(OBJS)
