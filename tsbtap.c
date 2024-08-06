@@ -407,7 +407,7 @@ size_t do_line(TOKEN *tok, FILE *fp, lang_tab *lang)
 				fprintf(fp, "%c%d", '@' + nm, typ - 5);
 			} else if (typ == 017) {
 				fprintf(fp, "%.3s", lang->fnames + 3 * nm);
-				if (nm == 027 || nm == 030)
+				if (nm == 027 || nm == 030)  /* CHR$, UPS$ */
 					fprintf(fp, "$");
 			} else {
 				fprintf(fp, "?0%o", typ);
@@ -509,7 +509,7 @@ int do_xopt(TAPE *tap, int vopt, char **argv)
 		"END", "STOP", "DATA", "INPUT", "READ", "PRINT", "RESTORE", "MAT",
 		"FILES", "CHAIN", "ENTER", " ", "OF", "THEN", "TO", "STEP" };
 	static char fns[] = "CTLTABLINSPATANATNEXPLOGABSSQRINTRNDSGNLENTYPTIM"
-			    "SINCOSBRKITMRECNUMPOSCHRUOSSYS?32ZERCONIDNINVTRN";
+			    "SINCOSBRKITMRECNUMPOSCHRUPSSYS?32ZERCONIDNINVTRN";
 	static lang_tab tsb2000c_tab = {tsb2000c_ops, tsb2000c_ops, fns, 0};
 	static lang_tab access_tab   = {acc_stmt_ops, acc_base_ops, fns, 1};
 	unsigned char dbuf[24];
