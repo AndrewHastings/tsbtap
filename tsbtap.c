@@ -33,6 +33,92 @@ int verbose = 0;
 
 
 /*
+ * -d: show tokens of TSB program.
+ */
+
+int do_dopt(TAPE *tap, int argc, char **argv)
+{
+	int i, ec = 0;
+	ssize_t nread;
+	unsigned char *tbuf;
+	char *found;
+
+	found = alloca(argc);
+	if (!found) {
+		fprintf(stderr, "too many file names\n");
+		return 3;
+	}
+	memset(found, 0, argc);
+
+	while ((nread = tap_readblock(tap, (char **)&tbuf)) >= 0) {
+		unsigned char dbuf[24];
+		char *err, *fn;
+		char nbuf[12], name[7];
+		unsigned uid;
+		int nbytes;
+		tfile_ctx_t tfile;
+
+		tfile_ctx_init(&tfile, tap, tbuf, nread);
+		nbytes = tfile_getbytes(&tfile, dbuf, 24);
+
+		/* skip TSB labels and short blocks */
+		if (nbytes >= 18 && memcmp(dbuf, "\377\366LBTS", 6) == 0) {
+			if (is_access < 0)
+				is_access = BE16(dbuf+16) >= ACCESS_OSLVL;
+			nbytes = 18;
+		}
+		if (nbytes < 24)
+			goto next;
+
+		/* get id and name */
+		uid = BE16(dbuf);
+		sprintf(nbuf, "%c%03d", '@' + (uid >> 10), uid & 0x3ff);
+		for (i = 0; i < 6; i++) {
+			name[i] = dbuf[i+2] & 0x7f;
+			if (name[i] == ' ')
+				break;
+		}
+		name[i] = '\0';
+
+		/* check for match */
+		for (i = 0; i < argc; i++)
+			if (fn = name_match(argv[i], nbuf, name))
+				break;
+		if (i == argc) /* no match */
+			goto next;
+		found[i] = 1;
+		err = NULL;
+
+		/* matched */
+		if (dbuf[4] & 0x80)
+			printf("Not dumping %s/%s\n", nbuf, name);
+		else
+			err = dump_program(&tfile, fn, dbuf);
+
+		if (err) {
+			ec = 2;
+			if (err[0])
+				printf("%s: %s\n", fn, err);
+		}
+
+next:
+		tfile_skipf(&tfile);
+		tfile_ctx_fini(&tfile);
+	}
+
+	if (nread == -2)
+		ec = 2;
+
+	for (i = 0; i < argc; i++)
+		if (!found[i]) {
+			fprintf(stderr, "%s not found\n", argv[i]);
+			ec = 3;
+		}
+	return ec;
+}
+
+
+/*
  * -r: show raw tape block structure.
  */
 
@@ -142,14 +228,13 @@ char *device_str(char *buf, unsigned char *dbuf)
 }
 
 
-int print_direntry(unsigned char *dbuf, int prev_uid)
+void print_direntry(unsigned char *dbuf)
 {
-	int i, len, uid;
+	int i, len;
 	unsigned flags;
 	char name[6], dev[5];
 	char type, mode, sanct;
 
-	uid = BE16(dbuf);
 	for (i = 0; i < 6; i++)
 		name[i] = dbuf[i+2] & 0x7f;
 	flags = BE16(dbuf+14);		/* pre-Access: drum addr */
@@ -183,12 +268,6 @@ int print_direntry(unsigned char *dbuf, int prev_uid)
 			sanct = 'S';	/* sanctified */
 	}
 
-	if (uid != prev_uid) {
-		if (!verbose)
-			printf("\n");
-		printf("\n%c%03d:\n", '@' + (uid >> 10), uid & 0x3ff);
-	}
-
 	printf("%.6s %c%c%c", name, type, mode, sanct);
 	if (verbose || type != 'A' || len)
 		printf("%4d", len);
@@ -213,12 +292,7 @@ int print_direntry(unsigned char *dbuf, int prev_uid)
 			printf(" FCP");
 		if (flags & 0x2000)
 			printf(" PFA");
-
-		printf("\n");
-	} else
-		printf("\t");
-
-	return uid;
+	}
 }
 
 
@@ -227,7 +301,7 @@ int do_topt(TAPE *tap)
 	unsigned char *dbuf;
 	ssize_t nread;
 	tfile_ctx_t tfile;
-	int uid = -1;
+	int prev_uid = -1;
 	int ec = 0;
 
 	while (1) {
@@ -253,10 +327,20 @@ int do_topt(TAPE *tap)
 			if (is_access < 0)
 				is_access = level >= ACCESS_OSLVL;
 
-		} else if (nread >= 24)
-			uid = print_direntry(dbuf, uid);
+		} else if (nread >= 24) {
+			int uid = BE16(dbuf);
 
-		else
+			if (uid != prev_uid) {
+				if (!verbose)
+					printf("\n");
+				printf("\n%c%03d:\n",
+				       '@' + (uid >> 10), uid & 0x3ff);
+				prev_uid = uid;
+			}
+			print_direntry(dbuf);
+			printf("%s", verbose ? "\n" : "\t");
+
+		} else
 			printf("Unrecognized tape block\n");
 
 		tfile_skipf(&tfile);
@@ -359,10 +443,8 @@ int do_xopt(TAPE *tap, int argc, char **argv)
 			err = extract_ascii_file(&tfile, fn, oname, dbuf);
 		else if (dbuf[4] & 0x80)
 			err = extract_basic_file(&tfile, fn, oname, dbuf);
-		else if (dbuf[6] & 0x80)
-			err = "not extracting CSAVEd program";
 		else
-			err = extract_program(&tfile, fn, oname);
+			err = extract_program(&tfile, fn, oname, dbuf);
 
 		/* get access time from directory entry */
 		if (oname[0]) {
@@ -405,10 +487,11 @@ char *prog;
 
 void usage(int ec)
 {
-	fprintf(stderr, "Usage: %s [-aOv] -f path.tap [-r | -t | -x files...]\n",
+	fprintf(stderr, "Usage: %s [-aOv] -f path.tap [-r | -t | -d files... | -x files...]\n",
 		prog);
 	fprintf(stderr, " -f   file in SIMH tape format (required)\n");
 	fprintf(stderr, "operations:\n");
+	fprintf(stderr, " -d   show tokens of TSB program \n");
 	fprintf(stderr, " -r   show raw tape block structure\n");
 	fprintf(stderr, " -t   catalog the tape\n");
 	fprintf(stderr, " -x   extract files from tape\n");
@@ -424,6 +507,7 @@ void usage(int ec)
 #define OP_R	1
 #define OP_T	2
 #define OP_X	4
+#define OP_D	8
 
 void main(int argc, char **argv)
 {
@@ -435,14 +519,18 @@ void main(int argc, char **argv)
 	prog = strrchr(argv[0], '/');
 	prog = prog ? prog+1 : argv[0];
 
-	while ((c = getopt(argc, argv, "adf:Ohrtvx")) != -1) {
+	while ((c = getopt(argc, argv, "aDdf:Ohrtvx")) != -1) {
 		switch (c) {
 		    case 'a':
 			is_access = 1;
 			break;
 
-		    case 'd':
+		    case 'D':
 			debug++;
+			break;
+
+		    case 'd':
+			op |= OP_D;
 			break;
 
 		    case 'f':
@@ -501,6 +589,7 @@ void main(int argc, char **argv)
 		}
 		break;
 
+	    case OP_D:
 	    case OP_X:
 		if (optind >= argc) {
 			fprintf(stderr, "no files specified\n");
@@ -510,7 +599,7 @@ void main(int argc, char **argv)
 
 	    default:
 		fprintf(stderr,
-			"must specify exactly one of -r, -t, or -x\n");
+			"must specify exactly one of -d, -r, -t, or -x\n");
 		usage(1);
 	}
 
@@ -524,6 +613,7 @@ void main(int argc, char **argv)
 	}
 
 	switch (op) {
+	    case OP_D:  ec = do_dopt(tap, argc-optind, argv+optind); break;
 	    case OP_R:  ec = do_ropt(tap); break;
 	    case OP_T:  ec = do_topt(tap); break;
 	    case OP_X:  ec = do_xopt(tap, argc-optind, argv+optind); break;

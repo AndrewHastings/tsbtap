@@ -21,42 +21,115 @@
 
 
 typedef struct {
-	tfile_ctx_t	*st_ctx;
+	unsigned char	*pg_buf;
+	unsigned char	*pg_bp;
+	int		pg_sz;
+} prog_ctx_t;
+
+
+int prog_init(prog_ctx_t *prog, tfile_ctx_t *tfile)
+{
+#define INCR 2048		/* observed tape block size */
+	unsigned char *buf;
+	int rv, nread;
+	int bufsz = 8 * INCR;	/* should be enough for largest TSB program */
+	int readsz = bufsz;
+
+	memset(prog, 0, sizeof(prog_ctx_t));
+
+	/* allocate initial buffer */
+	if (!(buf = malloc(bufsz))) {
+		printf("out of memory for BASIC program\n");
+		return -2;
+	}
+
+	/* read in entire program */
+	for (nread = 0;
+	     (rv = tfile_getbytes(tfile, buf+nread, readsz)) == readsz;
+	     nread += rv) {
+		/* grow buffer, continue reading */
+		bufsz += INCR;
+		if (!(buf = realloc(buf, bufsz))) {
+			printf("out of memory for BASIC program\n");
+			return -2;
+		}
+		readsz = INCR;
+	}
+	if (rv == -2)
+		return rv;
+	if (rv >= 0)
+		nread += rv;
+
+	prog->pg_buf = prog->pg_bp = buf;
+	prog->pg_sz = nread;
+	dprint(("prog_init: bufsz=%d progsz=%d\n", bufsz, nread));
+
+	return 0;
+#undef INCR
+}
+
+
+int prog_getbytes(prog_ctx_t *prog, unsigned char **bufp, int nbytes)
+{
+	int readsz, nleft;
+
+	nleft = prog->pg_sz - (prog->pg_bp - prog->pg_buf);
+	readsz = MIN(nbytes, nleft);
+	*bufp = prog->pg_bp;
+	prog->pg_bp += readsz;
+	return readsz;
+}
+
+
+int prog_nleft(prog_ctx_t *prog)
+{
+	return prog->pg_sz - (prog->pg_bp - prog->pg_buf);
+}
+
+
+void prog_fini(prog_ctx_t *prog)
+{
+	if (prog->pg_buf)
+		free(prog->pg_buf);
+	memset(prog, 0, sizeof(prog_ctx_t));
+}
+
+
+typedef struct {
+	prog_ctx_t	*st_ctx;
 	int		st_nleft;	/* in bytes */
 } stmt_ctx_t;
 
 
 /* returns TSB line number, -1 if error */
-int stmt_init(stmt_ctx_t *ctx, tfile_ctx_t *tfile)
+int stmt_init(stmt_ctx_t *ctx, prog_ctx_t *prog)
 {
-	unsigned char buf[4];
+	unsigned char *buf;
 	int nbytes;
 
 	/* get line number, count of 16-bit words */
-	nbytes = tfile_getbytes(tfile, buf, 4);
+	nbytes = prog_getbytes(prog, &buf, 4);
 	if (nbytes < 4) {
-		dprint(("stmt_init: EOF at 0x%lx\n",
-			ftell(tfile->tfile_tap->tp_fp)));
+		dprint(("stmt_init: EOF\n"));
 		return -1;
 	}
-	ctx->st_ctx = tfile;
+	ctx->st_ctx = prog;
 	ctx->st_nleft = 2 * BE16(buf+2) - 4;
 	return BE16(buf);
 }
 
 
 /* returns number of bytes copied. nbytes must be even */
-int stmt_getbytes(stmt_ctx_t *ctx, unsigned char *buf, int nbytes)
+int stmt_getbytes(stmt_ctx_t *ctx, unsigned char **buf, int nbytes)
 {
 	int nread;
 
 	assert((nbytes & 1) == 0);
 	nbytes = MIN(ctx->st_nleft, nbytes);
-	nread = tfile_getbytes(ctx->st_ctx, buf, nbytes);
+	nread = prog_getbytes(ctx->st_ctx, buf, nbytes);
 	ctx->st_nleft -= nread;
 	if (nread != nbytes)
-		dprint(("stmt_getbytes: EOF at 0x%lx\n",
-			ftell(ctx->st_ctx->tfile_tap->tp_fp)));
+		dprint(("stmt_getbytes: EOF\n"));
 	return nread;
 }
 
@@ -75,7 +148,7 @@ static char *access_stmts[] = {
 	"ADVANCE", "UPDATE", "ASSIGN", "LINPUT", "IMAGE", "COM", "LET", "DIM",
 	"DEF", "REM", "GOTO", "IF", "FOR", "NEXT", "GOSUB", "RETURN",
 	"END", "STOP", "DATA", "INPUT", "READ", "PRINT", "RESTORE", "MAT",
-	"FILES", "CHAIN", "ENTER", " ", "?74", "?75", "?76", "?77"
+	"FILES", "CHAIN", "ENTER", " " /* (LET) */, "?74", "?75", "?76", "?77"
 };
 static char *access_ops[] = {
 	"", "" /* " */, ",", ";", "#", "?05", "?06", "?07",
@@ -95,7 +168,7 @@ static char *tsb2000c_ops[] = {
 	"<=", "NOT", "ASSIGN", "USING", "IMAGE", "COM", "LET", "DIM",
 	"DEF", "REM", "GOTO", "IF", "FOR", "NEXT", "GOSUB", "RETURN",
 	"END", "STOP", "DATA", "INPUT", "READ", "PRINT", "RESTORE", "MAT",
-	"FILES", "CHAIN", "ENTER", " ", "OF", "THEN", "TO", "STEP"
+	"FILES", "CHAIN", "ENTER", " " /* (LET) */, "OF", "THEN", "TO", "STEP"
 };
 
 
@@ -103,7 +176,7 @@ char *print_str_operand(FILE *fp, stmt_ctx_t *ctx, unsigned token)
 {
 	int len = token & 0xff;
 	int i, nread;
-	unsigned char c, tbuf[256];
+	unsigned char c, *tbuf;
 
 	if (len == 0) {
 		fprintf(fp, "\"\"");
@@ -112,10 +185,10 @@ char *print_str_operand(FILE *fp, stmt_ctx_t *ctx, unsigned token)
 
 	/* consume even number of bytes */
 	nread = (len+1) & ~1;
-	if (stmt_getbytes(ctx, tbuf, nread) != nread)
+	if (stmt_getbytes(ctx, &tbuf, nread) != nread)
 		return "string extends past end of statement";
 
-	/* Access: use 'decimal notation for non-printable chars */
+	/* Access: use 'decimal notation for non-printable chars, quotes */
 	if (is_access > 0) {
 		int inquote = 0;
 
@@ -207,14 +280,14 @@ char *print_other_operand(FILE *fp, stmt_ctx_t *ctx, unsigned token,
 {
 	static char fns[] = "CTLTABLINSPATANATNEXPLOGABSSQRINTRNDSGNLENTYPTIM"
 			    "SINCOSBRKITMRECNUMPOSCHRUPSSYS?32ZERCONIDNINVTRN";
-	unsigned char tbuf[4];
+	unsigned char *tbuf;
 	unsigned op =   (token >> 9) & 0x3f;
 	unsigned name = (token >> 4) & 0x1f;
 	unsigned type =  token       & 0xf;
 
 	switch (type) {
 	    case 0:			/* floating-point number */
-		if (stmt_getbytes(ctx, tbuf, 4) != 4)
+		if (stmt_getbytes(ctx, &tbuf, 4) != 4)
 			return "number extends past end of statement";
 		print_number(fp, tbuf);
 		break;
@@ -224,7 +297,7 @@ char *print_other_operand(FILE *fp, stmt_ctx_t *ctx, unsigned token,
 		break;
 
 	    case 3:
-		if (stmt_getbytes(ctx, tbuf, 2) != 2)
+		if (stmt_getbytes(ctx, &tbuf, 2) != 2)
 			return "value extends past end of statement";
 		fprintf(fp, "%d", BE16(tbuf));
 		if (op   == 043 ||	/* USING */
@@ -233,7 +306,7 @@ char *print_other_operand(FILE *fp, stmt_ctx_t *ctx, unsigned token,
 			break;
 
 					/* GOTO/GOSUB OF */
-		while (stmt_getbytes(ctx, tbuf, 2) == 2)
+		while (stmt_getbytes(ctx, &tbuf, 2) == 2)
 			fprintf(fp, ",%d", BE16(tbuf));
 		break;
 
@@ -256,21 +329,31 @@ char *print_other_operand(FILE *fp, stmt_ctx_t *ctx, unsigned token,
 }
 
 
-char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname)
+char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname,
+		      unsigned char *dbuf)
 {
+	prog_ctx_t prog;
 	stmt_ctx_t ctx;
 	int lineno, prev_lineno = 0;
 	char *err = NULL;
 	FILE *fp;
 
-	fp = out_open(fn, "bas", oname);
-	if (!fp)
-		return "";
-
 	dprint(("extract_program: %s\n", fn));
 
-	while ((lineno = stmt_init(&ctx, tfile)) >= 0) {
-		unsigned char tbuf[512];
+	if (dbuf[6] & 0x80)
+		return "not extracting CSAVEd program";
+
+	if (prog_init(&prog, tfile) < 0)
+		return "";
+
+	fp = out_open(fn, "bas", oname);
+	if (!fp) {
+		prog_fini(&prog);
+		return "";
+	}
+
+	while ((lineno = stmt_init(&ctx, &prog)) >= 0) {
+		unsigned char *tbuf;
 		unsigned stmt = 0;
 		int nread;
 		char **opnames = is_access > 0 ? access_stmts : tsb2000c_ops;
@@ -284,7 +367,7 @@ char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname)
 		fprintf(fp, "%d ", lineno);
 		prev_lineno = lineno;
 
-		while (stmt_getbytes(&ctx, tbuf, 2) == 2) {
+		while (stmt_getbytes(&ctx, &tbuf, 2) == 2) {
 			unsigned token = BE16(tbuf);
 			unsigned op = (token >> 9) & 0x3f;
 			char *space, *name = opnames[op];
@@ -309,7 +392,7 @@ char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname)
 					/* fall thru */
 				    case 044:	/* IMAGE */
 					while (nread =
-						  stmt_getbytes(&ctx, tbuf,
+						  stmt_getbytes(&ctx, &tbuf,
 							        sizeof tbuf)) {
 						if (!tbuf[nread-1])
 							nread--;
@@ -344,5 +427,145 @@ next:
 	}
 
 	out_close(fp);
+	prog_fini(&prog);
+
 	return err;
+}
+
+
+char *dump_program(tfile_ctx_t *tfile, char *fn, unsigned char *dbuf)
+{
+	prog_ctx_t prog;
+	unsigned char *buf;
+	unsigned off;
+	int i, uid = BE16(dbuf);
+	int nused = 0, nleft = 0;	/* words in statement */
+
+	dprint(("dump_program: %s\n", fn));
+
+	printf("\n%c%03d/", '@' + (uid >> 10), uid & 0x3ff);
+	print_direntry(dbuf);
+	printf(" len=0x%04x start=0x%04x disk=0x%04x%04x\n",
+	       -(int16_t) BE16(dbuf+22), BE16(dbuf+8),
+	       BE16(dbuf+16), BE16(dbuf+18));
+
+	if (prog_init(&prog, tfile) < 0)
+		return "";
+
+	/* replace some op names for clarity */
+	for (i = 0; i < 0100; i++) {
+		if (tsb2000c_ops[i][0] == '?')
+			tsb2000c_ops[i] = "";
+		if (access_ops[i][0] == '?')
+			access_ops[i] = "";
+		if (access_stmts[i][0] == '?')
+			access_stmts[i] = "";
+	}
+	access_ops[0] = tsb2000c_ops[0] = "(end)";	/* end of formula */
+	access_ops[1] = tsb2000c_ops[1] = "\"";
+	access_ops[4] = tsb2000c_ops[4] = "#(file)";
+	access_stmts[073] = tsb2000c_ops[073] = "(LET)";
+
+	for (off = 0; prog_getbytes(&prog, &buf, 2) == 2; off++) {
+		unsigned val = BE16(buf);
+		unsigned op   = (val >> 9) & 0x3f;
+		unsigned name = (val >> 4) & 0x1f;
+		unsigned type =  val       & 0xf;
+		char *pfx, *sfx;
+
+		/* start or end of statement? */
+		pfx = " ";
+		switch (nleft) {
+		    case 1:   pfx = "}"; break;
+		    case 0:   pfx = "{"; nused = 0; break;
+		    case -1:  nleft = val - 1; break;
+		}
+		nleft--;
+		printf("%s ", pfx);
+
+		/* offset */
+		if (off & 0x7)
+			printf("     ");
+		else
+			printf("%5x", off);
+
+		/* contents as hex and decimal */
+		pfx = sfx = "";
+		if (nused == 0) {	    /* underline line number */
+			pfx = "\033[4m";
+			sfx = "\033[0m";
+		}
+		printf("  %04x (%s%5d%s)  ", val, pfx, val, sfx);
+
+		/* contents as ASCII */
+		for (i = 0; i < 2; i++) {
+			unsigned char c = buf[i];
+
+			if (c < 32 || c >= 127)
+				c = '.';
+			printf("%c%s", c, sfx);
+		}
+
+		/* contents as token codes */
+		printf("  %d-%2o-%2o-%2o  ", val >> 15, op, name, type);
+
+		/* contents as operator name(s) */
+		pfx = sfx = "";
+		if (nused == 2) {	    /* underline statement name */
+			pfx = "\033[4m";
+			sfx = "\033[0m";
+		}
+		if (is_access > 0)
+			printf("%s%-7s%s|%-7s", pfx, access_stmts[op], sfx,
+						access_ops[op]);
+		else
+			printf("%s%-7s%s", pfx, tsb2000c_ops[op], sfx);
+
+		/* contents as operand */
+		printf("  ");
+		if (val & 0x8000) {
+			switch (type) {
+			    case 0:
+				printf("(num)");
+				break;
+
+			    case 3:
+				printf("(int)");
+				break;
+
+			    default:
+				if (!name) {
+					printf("(par)");  /* fn param */
+					break;
+				}
+				/* fall thru */
+			    case 017:
+				(void) print_other_operand(stdout,
+							   NULL, val, 0);
+				break;
+			}
+		} else if (op == 1) {
+			printf("(str)");
+		} else {
+			if (name)
+				(void) print_var_operand(stdout, val);
+			else if (type)
+				printf("(var)");
+			else
+				printf("     ");
+		}
+
+		/* contents as FP number */
+		if (prog_nleft(&prog) >= 2) {
+			printf("\t");
+			print_number(stdout, buf);
+		}
+
+		printf("\n");
+		nused++;
+	}
+
+	prog_fini(&prog);
+
+	return NULL;
 }

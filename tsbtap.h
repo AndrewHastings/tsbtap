@@ -16,4 +16,5 @@ extern int is_access;
 extern int debug;
 extern int verbose;
 
+extern void print_direntry(unsigned char *dbuf);
 extern void print_number(FILE *fp, unsigned char *buf);
