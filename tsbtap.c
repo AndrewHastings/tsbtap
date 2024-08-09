@@ -131,11 +131,21 @@ void print_date(int yr, int jday)
 }
 
 
+char *device_str(char *buf, unsigned char *dbuf)
+{
+	unsigned device = BE16(dbuf+18);
+
+	sprintf(buf, "%c%c%d", 'A' + (device >> 10),
+			       'A' + ((device >> 5) & 0x1f), device & 0x1f);
+	return buf;
+}
+
+
 int print_direntry(unsigned char *dbuf, int prev_uid)
 {
 	int i, len, uid;
 	unsigned flags;
-	char name[6];
+	char name[6], dev[5];
 	char type, mode, sanct;
 
 	uid = BE16(dbuf);
@@ -178,7 +188,11 @@ int print_direntry(unsigned char *dbuf, int prev_uid)
 		printf("\n%c%03d:\n", '@' + (uid >> 10), uid & 0x3ff);
 	}
 
-	printf("%.6s %c%c%c %4d", name, type, mode, sanct, len);
+	printf("%.6s %c%c%c", name, type, mode, sanct);
+	if (verbose || type != 'A' || len)
+		printf("%4d", len);
+	else
+		printf("%4s", device_str(dev, dbuf));
 
 	if (verbose) {
 		unsigned adate = BE16(dbuf+10);
@@ -191,13 +205,8 @@ int print_direntry(unsigned char *dbuf, int prev_uid)
 
 		if (dbuf[4] & 0x80)
 			printf(" recsz=%d", BE16(dbuf+8));
-		if (type == 'A' && BE16(dbuf+16) == 0xffff) {
-			unsigned device = BE16(dbuf+18);
-
-			printf(" device=%c%c%d", 'A' + (device >> 10),
-					 'A' + ((device >> 5) & 0x1f),
-						       device & 0x1f);
-		}
+		if (type == 'A' && BE16(dbuf+16) == 0xffff)
+			printf(" device=%s", device_str(dev, dbuf));
 
 		if (flags & 0x800)
 			printf(" FCP");
