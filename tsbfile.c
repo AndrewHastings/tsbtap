@@ -175,18 +175,37 @@ char *extract_basic_file(tfile_ctx_t *tfile, char *fn, char *oname,
 
 			/* string */
 			if (buf[0] == 0x02) {
-				int stlen = buf[1] & 0xff;
+				int i, c, stlen = buf[1] & 0xff;
 
 				/* consume even number of bytes */
 				bits = (stlen+1) & ~1;
 				if (rec_getbytes(&ctx, buf, bits) != bits) {
-					err = "string extends past end of record";
+					err = "string extends past end of "
+					      "record";
 					break;
 				}
-				buf[stlen] = '\0';
 
-				/* TBD: handle embedded quote, null, newline */
-				fprintf(fp, "%s\"%s\"", sep, buf);
+				fprintf(fp, "%s\"", sep);
+				for (i = 0; i < stlen; i++) {
+					switch (c = buf[i]) {
+					    case '"':
+						fprintf(fp, "\"\"");
+						break;
+
+					    case '\0':
+						fprintf(fp, "\\000");
+						break;
+
+					    case '\n':
+						fprintf(fp, "\\n");
+						break;
+
+					    default:
+						putc(c, fp);
+						break;
+					}
+				}
+				putc('"', fp);
 				continue;
 			}
 
