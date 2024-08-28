@@ -372,20 +372,28 @@ int do_topt(TAPE *tap)
 
 void print_number(FILE *fp, unsigned char *buf)
 {
+	char sbuf[32], *sp = sbuf;
 	double val;
-	int expt;
+	int mant, expt;
 
-	val = (((buf[0] & 0x7f) << 16) | (buf[1] << 8) | buf[2])
-							  / (1.0 * (1 << 23));
-	if (buf[0] & 0x80)
-		val = -val;
+	mant = (buf[0] << 16) | (buf[1] << 8) | buf[2];
+	if (buf[0] & 0x80)	/* negative: sign-extend */
+		mant |= 0xff000000;
+	val = mant / (1.0 * (1 << 23));
+
 	expt = buf[3] >> 1;
-	if (buf[3] & 1)
+	if (buf[3] & 1)		/* negative exponent */
 		val /= pow(2, 128-expt);
 	else
 		val *= pow(2, expt);
-	/* TBD: eliminate 0 before decimal point */
-	fprintf(fp, "%G", val);
+
+	/* Eliminate 0 before decimal point */
+	sprintf(sp, "%G", val);
+	if (*sp == '-')
+		putc(*sp++, fp);
+	if (sp[0] == '0' && sp[1] == '.')
+		sp++;
+	fprintf(fp, "%s", sp);
 }
 
 
