@@ -131,6 +131,20 @@ int do_ropt(TAPE *tap)
  * -d: show tokens of TSB program.
  */
 
+int is_tsb_label(unsigned char *tbuf, int nbytes)
+{
+	if (nbytes >= 20 &&			/* long enough? */
+	    (tbuf[0] >> 2) > 26 &&		/* not a valid id (> Z)? */
+	    memcmp(tbuf+2, "LBTS", 4) == 0) {	/* name as expected? */
+		if (is_access < 0)
+			is_access = BE16(tbuf+16) >= ACCESS_OSLVL;
+		return 1;
+	}
+
+	return 0;
+}
+
+
 int do_dopt(TAPE *tap, int argc, char **argv)
 {
 	int i, ec = 0;
@@ -153,16 +167,15 @@ int do_dopt(TAPE *tap, int argc, char **argv)
 		int nbytes;
 		tfile_ctx_t tfile;
 
+		/* skip TSB labels */
+		if (is_tsb_label(tbuf, nread)) {
+			tfile_ctx_init(&tfile, tap, tbuf, nread);
+			goto next;
+		}
+
 		tfile_ctx_init(&tfile, tap, tbuf, nread);
 		nbytes = tfile_getbytes(&tfile, dbuf, 24);
-
-		/* skip TSB labels and short blocks */
-		if (nbytes >= 18 && memcmp(dbuf, "\377\366LBTS", 6) == 0) {
-			if (is_access < 0)
-				is_access = BE16(dbuf+16) >= ACCESS_OSLVL;
-			nbytes = 18;
-		}
-		if (nbytes < 24)
+		if (nbytes < 24)	/* skip short block */
 			goto next;
 
 		/* get id and name */
@@ -310,14 +323,15 @@ void print_direntry(unsigned char *dbuf)
 
 int do_topt(TAPE *tap)
 {
-	unsigned char *dbuf;
+	unsigned char *tbuf;
 	ssize_t nread;
 	tfile_ctx_t tfile;
+	int is_hib = 0;
 	int prev_uid = -1;
 	int ec = 0;
 
 	while (1) {
-		nread = tap_readblock(tap, (char **) &dbuf);
+		nread = tap_readblock(tap, (char **) &tbuf);
 		if (nread < 0) {
 			if (nread == -2)
 				ec = 2;
@@ -328,19 +342,42 @@ int do_topt(TAPE *tap)
 			continue;
 		}
 
-		tfile_ctx_init(&tfile, tap, dbuf, nread);
+		/* process TSB labels */
+		if (is_tsb_label(tbuf, nread)) {
+			unsigned char dbuf[20];
 
-		if (nread >= 18 && memcmp(dbuf, "\377\366LBTS", 6) == 0) {
-			unsigned level = BE16(dbuf+16);
+			/* save label */
+			memcpy(dbuf, tbuf, 20);
 
-			printf("\nTSB Dump reel %-2d  ", BE16(dbuf+8));
+			/* hibernate tape has blocks between label & tapemark */
+			if (!is_hib) {
+				nread = tap_readblock(tap, (char **) &tbuf);
+				if (nread > 0)
+					is_hib = 1;
+			}
+
+			/* print label */
+			printf("\nTSB %s reel %-2d  ",
+				is_hib ? "Hibernate" : "Dump", BE16(dbuf+8));
 		        print_date(BE16(dbuf+10), BE16(dbuf+12) / 24);
-		        printf("  oslvl %d-%d\n", level, BE16(dbuf+18));
-			if (is_access < 0)
-				is_access = level >= ACCESS_OSLVL;
+			printf("  oslvl %d-%d\n", BE16(dbuf+16), BE16(dbuf+18));
 
-		} else if (nread >= 24) {
-			int uid = BE16(dbuf);
+			if (nread < 0) {
+				if (nread == -2)
+					ec = 2;
+				break;
+			}
+			if (nread == 0)
+				continue;
+
+			tfile_ctx_init(&tfile, tap, tbuf, nread);
+			goto next;
+		}
+
+		tfile_ctx_init(&tfile, tap, tbuf, nread);
+
+		if (nread >= 24) {
+			int uid = BE16(tbuf);
 
 			if (uid != prev_uid) {
 				if (!verbose)
@@ -349,12 +386,13 @@ int do_topt(TAPE *tap)
 				       '@' + (uid >> 10), uid & 0x3ff);
 				prev_uid = uid;
 			}
-			print_direntry(dbuf);
+			print_direntry(tbuf);
 			printf("%s", verbose ? "\n" : "\t");
 
 		} else
 			printf("Unrecognized tape block\n");
 
+next:
 		tfile_skipf(&tfile);
 		tfile_ctx_fini(&tfile);
 	}
@@ -419,16 +457,15 @@ int do_xopt(TAPE *tap, int argc, char **argv)
 		int nbytes;
 		tfile_ctx_t tfile;
 
+		/* skip TSB labels */
+		if (is_tsb_label(tbuf, nread)) {
+			tfile_ctx_init(&tfile, tap, tbuf, nread);
+			goto next;
+		}
+
 		tfile_ctx_init(&tfile, tap, tbuf, nread);
 		nbytes = tfile_getbytes(&tfile, dbuf, 24);
-
-		/* skip TSB labels and short blocks */
-		if (nbytes >= 18 && memcmp(dbuf, "\377\366LBTS", 6) == 0) {
-			if (is_access < 0)
-				is_access = BE16(dbuf+16) >= ACCESS_OSLVL;
-			nbytes = 18;
-		}
-		if (nbytes < 24)
+		if (nbytes < 24)	/* skip short block */
 			goto next;
 
 		/* get id and name */

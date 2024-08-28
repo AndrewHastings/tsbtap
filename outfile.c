@@ -77,6 +77,8 @@ int jdate_to_tm(int yr, int jday, struct tm *tm)
 	if (i == 12)
 		return -1;
 
+	if (yr < 60)
+		yr += 100;
 	tm->tm_year = yr;
 	tm->tm_mon = i;
 	tm->tm_mday = jday;
