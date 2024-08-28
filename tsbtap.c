@@ -45,6 +45,89 @@ int verbose = 0;
 
 
 /*
+ * -r: show raw tape block structure.
+ */
+
+int do_ropt(TAPE *tap)
+{
+	ssize_t nbytes;
+	int i, j, lim, ec = 0;
+	unsigned char *tbuf, c;
+	char *sfx;
+
+	while (1) {
+		nbytes = tap_readblock(tap, (char **) &tbuf);
+		if (nbytes < 0) {
+			if (nbytes == -2)
+				ec = 2;
+			break;
+		}
+		if (nbytes == 0) {
+			printf("  --mark--\n");
+			continue;
+		}
+
+		switch (verbose) {
+		    case 0:   lim = 32; break;
+		    case 1:   lim = 128; break;
+		    default:  lim = nbytes; break;
+		}
+		lim = MIN(nbytes, lim);
+
+		printf("%6ld  ", nbytes);
+		for (i = 0; i < lim; i += 16) {
+			if (i)
+				printf("        ");
+
+			/* print 16 bytes as hex */
+			for (j = 0; j < 16; j++) {
+				if (i+j < lim)
+					printf("%02x", tbuf[i+j]);
+				else
+					printf("  ");
+				if (j % 2 == 1)
+					putchar(' ');
+				if (j % 8 == 7)
+					putchar(' ');
+			}
+
+			/* print 16 bytes as ASCII */
+			for (j = 0; j < 16; j++) {
+				if (i+j < lim) {
+					sfx = "";
+					c = tbuf[i+j];
+					if ((c & 0x7f) < 32 ||
+					    (c & 0x7f) == 127)
+						c = '.';
+					if (c & 0x80) {
+						c &= 0x7f;
+						if (c == ' ' ||
+						    c >= 'A' && c <= 'Z' ||
+						    c >= '0' && c <= '9') {
+							/* ul */
+							printf("\033[4m");
+							sfx = "\033[0m";
+						} else
+							c = '.';
+					}
+					printf("%c%s", c, sfx);
+				} else
+					putchar(' ');
+				if (j % 8 == 7)
+					putchar(' ');
+			}
+
+			if (i % 64 == 0)
+				printf(" 0x%x", i);
+			putchar('\n');
+		}
+	}
+
+	return ec;
+}
+
+
+/*
  * -d: show tokens of TSB program.
  */
 
@@ -126,89 +209,6 @@ next:
 			fprintf(stderr, "%s not found\n", argv[i]);
 			ec = 3;
 		}
-	return ec;
-}
-
-
-/*
- * -r: show raw tape block structure.
- */
-
-int do_ropt(TAPE *tap)
-{
-	ssize_t nbytes;
-	int i, j, lim, ec = 0;
-	unsigned char *tbuf, c;
-	char *sfx;
-
-	while (1) {
-		nbytes = tap_readblock(tap, (char **) &tbuf);
-		if (nbytes < 0) {
-			if (nbytes == -2)
-				ec = 2;
-			break;
-		}
-		if (nbytes == 0) {
-			printf("  --mark--\n");
-			continue;
-		}
-
-		switch (verbose) {
-		    case 0:   lim = 32; break;
-		    case 1:   lim = 128; break;
-		    default:  lim = nbytes; break;
-		}
-		lim = MIN(nbytes, lim);
-
-		printf("%6ld  ", nbytes);
-		for (i = 0; i < lim; i += 16) {
-			if (i)
-				printf("        ");
-
-			/* print 16 bytes as hex */
-			for (j = 0; j < 16; j++) {
-				if (i+j < lim)
-					printf("%02x", tbuf[i+j]);
-				else
-					printf("  ");
-				if (j % 2 == 1)
-					putchar(' ');
-				if (j % 8 == 7)
-					putchar(' ');
-			}
-
-			/* print 16 bytes as ASCII */
-			for (j = 0; j < 16; j++) {
-				if (i+j < lim) {
-					sfx = "";
-					c = tbuf[i+j];
-					if ((c & 0x7f) < 32 ||
-					    (c & 0x7f) == 127)
-						c = '.';
-					if (c & 0x80) {
-						c &= 0x7f;
-						if (c == ' ' ||
-						    c >= 'A' && c <= 'Z' ||
-						    c >= '0' && c <= '9') {
-							/* ul */
-							printf("\033[4m");
-							sfx = "\033[0m";
-						} else
-							c = '.';
-					}
-					printf("%c%s", c, sfx);
-				} else
-					putchar(' ');
-				if (j % 8 == 7)
-					putchar(' ');
-			}
-
-			if (i % 64 == 0)
-				printf(" 0x%x", i);
-			putchar('\n');
-		}
-	}
-
 	return ec;
 }
 
