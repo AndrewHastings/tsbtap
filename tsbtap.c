@@ -411,6 +411,7 @@ next:
 void print_number(FILE *fp, unsigned char *buf)
 {
 	char sbuf[32], *sp = sbuf;
+	int e;
 	double val;
 	int mant, expt;
 
@@ -425,13 +426,50 @@ void print_number(FILE *fp, unsigned char *buf)
 	else
 		val *= pow(2, expt);
 
-	/* Eliminate 0 before decimal point */
+	/* Convert to string, advance past leading '-' */
 	sprintf(sp, "%G", val);
 	if (*sp == '-')
 		putc(*sp++, fp);
-	if (sp[0] == '0' && sp[1] == '.')
-		sp++;
+
+	/* Special case "0.*" */
+	if (sp[0] == '0' && sp[1] == '.') {
+		sp++;			/* drop initial '0' before decimal */
+		if (strlen(sp+1) > 6) {	/* too many digits? */
+			/* print as 'E' format */
+			e = 1;
+			for (sp++; *sp == '0'; sp++)
+				e++;
+			putc(*sp++, fp);
+			fprintf(fp, ".%sE-%02d", sp, e);
+			*sp = '\0';	/* nothing else to print */
+
+		}
+
+	/* Special case "?E*" */
+	} else if (sp[1] == 'E') {
+		/* small negative exp: print as decimal, not 'E' format */
+		if (sp[2] == '-' && sp[3] == '0' && sp[4] < '7') {
+			putc('.', fp);
+			for (e = sp[4]-'0'; e > 1; e--)
+				putc('0', fp);
+			sp[1] = '\0';	/* delete "E*" */
+
+		/* otherwise, insert '.' between initial digit and 'E' */
+		} else {
+			putc(*sp++, fp);
+			putc('.', fp);
+		}
+	}
+
+	/* Print remaining part of conversion to string */
 	fprintf(fp, "%s", sp);
+
+	/* Append '.' to some large integers */
+	if (!strchr(sp, '.')) {
+		val = fabs(val);
+		if (val > 32767 && val < 1000000)
+			putc('.', fp);
+	}
 }
 
 
