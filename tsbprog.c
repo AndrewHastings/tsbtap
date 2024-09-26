@@ -198,7 +198,7 @@ static char *access_ops[] = {
 	"END", "?61", "?62", "INPUT", "READ", "PRINT", "?66", "?67",
 	"?70", "?71", "?72", "?73", "OF", "THEN", "TO", "STEP"
 };
-static char *tsb2000c_ops[] = {
+static char *tsb2000f_ops[] = {
 	"", "" /* " */, ",", ";", "#", "?05", "?06", "?07",
 	")", "]", "[", "(", "+", "-", ",", "=",
 	"+", "-", "*", "/", "^", ">", "<", "#",
@@ -247,30 +247,9 @@ char *print_str_operand(FILE *fp, unsigned token, stmt_ctx_t *ctx)
 		if (inquote)
 			putc('"', fp);
 
-	/* pre-Access: ctrl-N for LF, ctrl-O for CR */
+	/* pre-Access: just print it */
 	} else {
-		putc('"', fp);
-		for (i = 0; i < len; i++) {
-			switch (c = tbuf[i]) {
-			    case '\n':
-				c = '\016';	/* ctrl-N */
-				break;
-
-			    case '\r':
-				c = '\017';	/* ctrl-O */
-				break;
-
-			    case '\016':	/* ctrl-N */
-				c = '\n';
-				break;
-
-			    case '\017':	/* ctrl-O */
-				c = '\r';
-				break;
-			}
-			putc(c, fp);
-		}
-		putc('"', fp);
+		fprintf(fp, "\"%.*s\"", len, tbuf);
 	}
 
 	return NULL;
@@ -340,7 +319,7 @@ char *print_int_operand(FILE *fp, unsigned token, unsigned stmt,
 
 	while (stmt_getbytes(ctx, &tbuf, 2) == 2) {	/* GOTO/GOSUB OF */
 		val = BE16(tbuf);
-		if (prog && !is_dim) {	/* if CSAVEd, get dest lineno */
+		if (prog) {		/* if CSAVEd, get dest lineno */
 			if (prog_getbytesat(prog, &tbuf, 2, (val - start) * 2)
 									  == 2)
 				val = BE16(tbuf);
@@ -434,9 +413,9 @@ char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname,
 
 	while ((lineno = stmt_init(&ctx, &prog)) >= 0) {
 		unsigned char *tbuf;
-		unsigned stmt = 0;
+		int stmt = -1;
 		int nread;
-		char **opnames = is_access > 0 ? access_stmts : tsb2000c_ops;
+		char **opnames = is_access > 0 ? access_stmts : tsb2000f_ops;
 
 		dprint(("extract_program: line %d\n", lineno));
 		if (lineno > 9999 || lineno <= prev_lineno) {
@@ -460,7 +439,7 @@ char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname,
 			fprintf(fp, "%s%s", space, name);
 
 			/* save statement code; process special cases */
-			if (opnames != access_ops) {
+			if (stmt < 0) {
 				stmt = op;
 				switch (op) {
 				    case 070:	/* FILES */
@@ -559,17 +538,17 @@ char *dump_program(tfile_ctx_t *tfile, char *fn, unsigned char *dbuf)
 
 	/* replace some op names for clarity */
 	for (i = 0; i < 0100; i++) {
-		if (tsb2000c_ops[i][0] == '?')
-			tsb2000c_ops[i] = "";
+		if (tsb2000f_ops[i][0] == '?')
+			tsb2000f_ops[i] = "";
 		if (access_ops[i][0] == '?')
 			access_ops[i] = "";
 		if (access_stmts[i][0] == '?')
 			access_stmts[i] = "";
 	}
-	access_ops[0] = tsb2000c_ops[0] = "(end)";	/* end of formula */
-	access_ops[1] = tsb2000c_ops[1] = "\"";
-	access_ops[4] = tsb2000c_ops[4] = "#(file)";
-	access_stmts[073] = tsb2000c_ops[073] = "(LET)";
+	access_ops[0] = tsb2000f_ops[0] = "(end)";	/* end of formula */
+	access_ops[1] = tsb2000f_ops[1] = "\"";
+	access_ops[4] = tsb2000f_ops[4] = "#(file)";
+	access_stmts[073] = tsb2000f_ops[073] = "(LET)";
 
 	for (off = 0; prog_getbytes(&prog, &buf, 2) == 2; off++) {
 		unsigned val = BE16(buf);
@@ -624,7 +603,7 @@ char *dump_program(tfile_ctx_t *tfile, char *fn, unsigned char *dbuf)
 			printf("%s%-7s%s|%-7s", pfx, access_stmts[op], sfx,
 						access_ops[op]);
 		else
-			printf("%s%-7s%s", pfx, tsb2000c_ops[op], sfx);
+			printf("%s%-7s%s", pfx, tsb2000f_ops[op], sfx);
 
 		/* contents as operand */
 		printf("  ");

@@ -1,8 +1,8 @@
 # tsbtap
 
 **tsbtap** reads SIMH-format tape images that come from the 1970s-era
-Hewlett-Packard (HP) 2000 Time-shared BASIC (TSB) Access System that
-are in that system's "dump" format.
+Hewlett-Packard (HP) Time-shared BASIC (TSB) 2000F and 2000 Access System
+that are in that system's "dump" format.
 
 **tsbtap** has options similar to the UNIX **tar** program for viewing tape
 contents and extracting items from the tape.

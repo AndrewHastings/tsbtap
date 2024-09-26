@@ -169,11 +169,11 @@ int do_dopt(TAPE *tap, int argc, char **argv)
 
 		/* skip TSB labels */
 		if (is_tsb_label(tbuf, nread)) {
-			tfile_ctx_init(&tfile, tap, tbuf, nread);
+			tfile_ctx_init(&tfile, tap, tbuf, nread, 0);
 			goto next;
 		}
 
-		tfile_ctx_init(&tfile, tap, tbuf, nread);
+		tfile_ctx_init(&tfile, tap, tbuf, nread, is_access > 0 ? 0 : 2);
 		nbytes = tfile_getbytes(&tfile, dbuf, 24);
 		if (nbytes < 24)	/* skip short block */
 			goto next;
@@ -313,10 +313,12 @@ void print_direntry(unsigned char *dbuf)
 		if (type == 'A' && BE16(dbuf+16) == 0xffff)
 			printf(" device=%s", device_str(dev, dbuf));
 
-		if (flags & 0x800)
-			printf(" FCP");
-		if (flags & 0x2000)
-			printf(" PFA");
+		if (is_access > 0) {
+			if (flags & 0x800)
+				printf(" FCP");
+			if (flags & 0x2000)
+				printf(" PFA");
+		}
 	}
 }
 
@@ -331,6 +333,8 @@ int do_topt(TAPE *tap)
 	int ec = 0;
 
 	while (1) {
+		int off = 0;
+
 		nread = tap_readblock(tap, (char **) &tbuf);
 		if (nread < 0) {
 			if (nread == -2)
@@ -343,6 +347,7 @@ int do_topt(TAPE *tap)
 		}
 
 		/* process TSB labels */
+		tfile_ctx_init(&tfile, tap, tbuf, nread, 0);
 		if (is_tsb_label(tbuf, nread)) {
 			unsigned char dbuf[20];
 
@@ -370,14 +375,14 @@ int do_topt(TAPE *tap)
 			if (nread == 0)
 				continue;
 
-			tfile_ctx_init(&tfile, tap, tbuf, nread);
+			tfile_ctx_init(&tfile, tap, tbuf, nread, 0);
 			goto next;
 		}
 
-		tfile_ctx_init(&tfile, tap, tbuf, nread);
+		tfile_ctx_init(&tfile, tap, tbuf, nread, 0);
 
-		if (nread >= 24) {
-			int uid = BE16(tbuf);
+		if (nread >= 24 + off) {
+			int uid = BE16(tbuf + off);
 
 			if (uid != prev_uid) {
 				if (!verbose)
@@ -386,11 +391,13 @@ int do_topt(TAPE *tap)
 				       '@' + (uid >> 10), uid & 0x3ff);
 				prev_uid = uid;
 			}
-			print_direntry(tbuf);
+			print_direntry(tbuf + off);
 			printf("%s", verbose ? "\n" : "\t");
 
-		} else
-			printf("Unrecognized tape block\n");
+		} else {
+			printf("  --short block: %ld byte%s--\n", nread,
+			       nread == 1 ? "" : "s");
+		}
 
 next:
 		tfile_skipf(&tfile);
@@ -497,11 +504,11 @@ int do_xopt(TAPE *tap, int argc, char **argv)
 
 		/* skip TSB labels */
 		if (is_tsb_label(tbuf, nread)) {
-			tfile_ctx_init(&tfile, tap, tbuf, nread);
+			tfile_ctx_init(&tfile, tap, tbuf, nread, 0);
 			goto next;
 		}
 
-		tfile_ctx_init(&tfile, tap, tbuf, nread);
+		tfile_ctx_init(&tfile, tap, tbuf, nread, is_access > 0 ? 0 : 2);
 		nbytes = tfile_getbytes(&tfile, dbuf, 24);
 		if (nbytes < 24)	/* skip short block */
 			goto next;

@@ -28,11 +28,17 @@
 #include "tsbtap.h"
 
 
-void tfile_ctx_init(tfile_ctx_t *ctx, TAPE *tap, char *buf, int nbytes)
+void tfile_ctx_init(tfile_ctx_t *ctx, TAPE *tap, char *buf, int nbytes, int hdr)
 {
 	ctx->tfile_tap = tap;
-	ctx->tfile_buf = ctx->tfile_bp = buf;
-	ctx->tfile_nleft = nbytes;
+	ctx->tfile_hdr = hdr;
+	if (nbytes < hdr) {
+		ctx->tfile_buf = ctx->tfile_bp = NULL;
+		ctx->tfile_nleft = 0;
+	} else {
+		ctx->tfile_buf = ctx->tfile_bp = buf + hdr;
+		ctx->tfile_nleft = nbytes - hdr;
+	}
 	ctx->tfile_ateof = 0;
 }
 
@@ -97,6 +103,14 @@ int tfile_skipbytes(tfile_ctx_t *ctx, int nbytes)
 			return nread == -2 ? -2 : -1;
 		}
 
+		/* skip over pre-Access header bytes */
+		ctx->tfile_buf += ctx->tfile_hdr;
+		nread -= ctx->tfile_hdr;
+		if (nread <= 0) {
+			ctx->tfile_nleft = 0;
+			continue;
+		}
+
 		ctx->tfile_bp = ctx->tfile_buf;
 		ctx->tfile_nleft = nread;
 	}
@@ -130,6 +144,14 @@ int tfile_getbytes(tfile_ctx_t *ctx, char *buf, int nbytes)
 					return -2;
 				dprint(("tfile_getbytes: short copy %d\n", rv));
 				return rv ? rv : -1;
+			}
+
+			/* skip over pre-Access header bytes */
+			ctx->tfile_buf += ctx->tfile_hdr;
+			nread -= ctx->tfile_hdr;
+			if (nread <= 0) {
+				ctx->tfile_nleft = 0;
+				continue;
 			}
 
 			ctx->tfile_bp = ctx->tfile_buf;

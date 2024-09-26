@@ -28,11 +28,13 @@ typedef struct {
 	TAPE	*tfile_tap;
 	char	*tfile_buf;
 	char	*tfile_bp;
+	int	tfile_hdr;
 	int	tfile_nleft;
 	int	tfile_ateof;
 } tfile_ctx_t;
 
-extern void tfile_ctx_init(tfile_ctx_t *ctx, TAPE *tap, char *buf, int nbytes);
+extern void tfile_ctx_init(tfile_ctx_t *ctx, TAPE *tap, char *buf, int nbytes,
+			   int hdr);
 extern void tfile_ctx_fini(tfile_ctx_t *ctx);
 extern int tfile_getbytes(tfile_ctx_t *ctx, char *buf, int nbytes);
 extern int tfile_skipbytes(tfile_ctx_t *ctx, int nbytes);
