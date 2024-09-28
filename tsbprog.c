@@ -29,6 +29,7 @@
 #include "outfile.h"
 #include "simtap.h"
 #include "tfilefmt.h"
+#include "tsbprog.h"
 #include "tsbtap.h"
 
 
@@ -42,10 +43,9 @@ typedef struct {
 
 int prog_init(prog_ctx_t *prog, tfile_ctx_t *tfile)
 {
-#define INCR 2048		/* observed tape block size */
 	unsigned char *buf;
 	int rv, nread;
-	int bufsz = 8 * INCR;	/* should be enough for largest TSB program */
+	int bufsz = 8 * TBLOCKSIZE;	/* should hold largest TSB program */
 	int readsz = bufsz;
 
 	memset(prog, 0, sizeof(prog_ctx_t));
@@ -61,12 +61,12 @@ int prog_init(prog_ctx_t *prog, tfile_ctx_t *tfile)
 	     (rv = tfile_getbytes(tfile, buf+nread, readsz)) == readsz;
 	     nread += rv) {
 		/* grow buffer, continue reading */
-		bufsz += INCR;
+		bufsz += TBLOCKSIZE;
 		if (!(buf = realloc(buf, bufsz))) {
 			printf("out of memory for BASIC program\n");
 			return -2;
 		}
-		readsz = INCR;
+		readsz = TBLOCKSIZE;
 	}
 	if (rv == -2)
 		return rv;
@@ -78,7 +78,6 @@ int prog_init(prog_ctx_t *prog, tfile_ctx_t *tfile)
 	dprint(("prog_init: bufsz=%d progsz=%d\n", bufsz, nread));
 
 	return 0;
-#undef INCR
 }
 
 
@@ -442,7 +441,7 @@ char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname,
 			dprint(("extract_program: 0x%04x <%d,0%02o,0%o,0%o> "
 				"@ 0x%lx\n", token, token >> 15, op,
 				(token >> 4) & 0x1f, token & 0xf,
-				ftell(tfile->tfile_tap->tp_fp)));
+				ftell(tfile->tf_tap->tp_fp)));
 			space = name[0] && name[1] ? " " : "";
 			fprintf(fp, "%s%s", space, name);
 

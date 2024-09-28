@@ -168,6 +168,10 @@ int do_dopt(TAPE *tap, int argc, char **argv)
 		int nbytes;
 		tfile_ctx_t tfile;
 
+		/* skip tapemarks */
+		if (nread == 0)
+			continue;
+
 		/* skip TSB labels */
 		if (is_tsb_label(tbuf, nread)) {
 			tfile_ctx_init(&tfile, tap, tbuf, nread, 0);
@@ -376,11 +380,11 @@ int do_topt(TAPE *tap)
 			if (nread == 0)
 				continue;
 
-			tfile_ctx_init(&tfile, tap, tbuf, nread, 0);
 			goto next;
 		}
 
-		tfile_ctx_init(&tfile, tap, tbuf, nread, 0);
+		if (is_access <= 0)	/* skip pre-Access header */
+			off = 2;
 
 		if (nread >= 24 + off) {
 			int uid = BE16(tbuf + off);
@@ -502,6 +506,10 @@ int do_xopt(TAPE *tap, int argc, char **argv)
 		unsigned uid;
 		int nbytes;
 		tfile_ctx_t tfile;
+
+		/* skip tapemarks */
+		if (nread == 0)
+			continue;
 
 		/* skip TSB labels */
 		if (is_tsb_label(tbuf, nread)) {
@@ -715,7 +723,7 @@ void main(int argc, char **argv)
 	if (debug)
 		setbuf(stdout, NULL);
 
-	if (!(tap = tap_open(ifile))) {
+	if (!(tap = tap_open(ifile, 0))) {
 		perror(ifile);
 		exit(1);
 	}

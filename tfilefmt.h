@@ -16,7 +16,7 @@
  */
 
 /*
- * Routines for reading tapes containing files delimited by tapemarks.
+ * Routines for reading/writing tapes containing files delimited by tapemarks.
  */
 
 #ifndef _TFILEFMT_H
@@ -24,20 +24,25 @@
 
 #include "simtap.h"
 
+#define TBLOCKSIZE 2048		/* observed tape block size */
+
 typedef struct {
-	TAPE	*tfile_tap;
-	char	*tfile_buf;
-	char	*tfile_bp;
-	int	tfile_hdr;
-	int	tfile_nleft;
-	int	tfile_ateof;
+	TAPE	*tf_tap;
+	char	*tf_buf;
+	char	*tf_bp;
+	int	tf_hdr;
+	int	tf_nleft;
+	int	tf_bufsize;
+	int	tf_ateof;
 } tfile_ctx_t;
 
-extern void tfile_ctx_init(tfile_ctx_t *ctx, TAPE *tap, char *buf, int nbytes,
-			   int hdr);
+extern int tfile_ctx_init(tfile_ctx_t *ctx, TAPE *tap, char *buf, int nbytes,
+			  int hdr);
 extern void tfile_ctx_fini(tfile_ctx_t *ctx);
 extern int tfile_getbytes(tfile_ctx_t *ctx, char *buf, int nbytes);
 extern int tfile_skipbytes(tfile_ctx_t *ctx, int nbytes);
 extern int tfile_skipf(tfile_ctx_t *ctx);
+extern int tfile_putbytes(tfile_ctx_t *ctx, char *buf, int nbytes);
+extern int tfile_writef(tfile_ctx_t *ctx, int minsz);
 
 #endif /* _TFILEFMT_H */

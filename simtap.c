@@ -31,16 +31,18 @@
 			 ((bp)[1] << 8)  | (bp)[0])
 
 /* tp_status bits */
+#define	TP_WRITE	0x1
 #define	TP_ERR		0x40
 #define	TP_EOM		0x80
 
 
-TAPE *tap_open(char *path)
+TAPE *tap_open(char *path, int is_write)
 {
 	FILE *fp;
 	TAPE *rv;
+	char *mode = is_write ? "w" : "r";
 
-	fp = fopen(path, "r");
+	fp = fopen(path, mode);
 	if (!fp)
 		return NULL;
 
@@ -50,7 +52,7 @@ TAPE *tap_open(char *path)
 		rv->tp_path = path;
 		rv->tp_buf = NULL;
 		rv->tp_nbytes = 0;
-		rv->tp_status = 0;
+		rv->tp_status = is_write ? TP_WRITE : 0;
 	}
 
 	return rv;
@@ -67,6 +69,12 @@ void tap_close(TAPE *tap)
 }
 
 
+int tap_is_write(TAPE *tap)
+{
+	return tap->tp_status & TP_WRITE;
+}
+
+
 /* Read next tape block */
 /* returns block size, -1=end of tape, -2=error, e.g. out of memory */
 ssize_t tap_readblock(TAPE *tap, char **bufp)
@@ -75,6 +83,13 @@ ssize_t tap_readblock(TAPE *tap, char **bufp)
 	size_t rv;
 
 	*bufp = NULL;
+
+	if (tap->tp_status & TP_WRITE) {
+		fprintf(stderr,
+			"%s: tap_readblock not allowed while writing tape",
+			tap->tp_path);
+		return -2;
+	}
 
 	if (tap->tp_status & TP_ERR)
 		return -2;
@@ -155,4 +170,44 @@ ssize_t tap_readblock(TAPE *tap, char **bufp)
 	}
 
 	return tap->tp_nbytes;
+}
+
+
+/* Write SIMH-format tape block */
+/* returns bytes written inc. header/trailer, -1 if error */
+ssize_t tap_writeblock(TAPE *tap, char *buf, ssize_t nbytes)
+{
+	char len[4], pad = '\0';
+	ssize_t rv;
+
+	if (!(tap->tp_status & TP_WRITE)) {
+		fprintf(stderr,
+			"%s: tap_writeblock not allowed while reading tape",
+			tap->tp_path);
+		return (ssize_t) -1;
+	}
+
+	len[0] = nbytes & 0xff;
+	len[1] = (nbytes >> 8) & 0xff;
+	len[2] = (nbytes >> 16) & 0xff;
+	len[3] = (nbytes >> 24) & 0xff;
+
+	/* write header size */
+	rv = fwrite(len, 1, 4, tap->tp_fp);
+
+	/* tapemark, don't write trail size */
+	if (nbytes == 0)
+		return rv;
+
+	/* write data and pad */
+	rv += fwrite(buf, 1, nbytes, tap->tp_fp);
+	if (nbytes & 1) {
+		dprint(("tap_writeblock: add pad, nbytes %ld\n", nbytes));
+		rv += fwrite(&pad, 1, 1, tap->tp_fp);
+	}
+
+	/* write trail size */
+	rv += fwrite(len, 1, 4, tap->tp_fp);
+
+	return rv;
 }

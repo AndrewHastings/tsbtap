@@ -59,7 +59,7 @@ void rec_skip(rec_ctx_t *ctx)
 	nread = tfile_getbytes(ctx->rec_ctx, buf, nskip);
 	if (nread != nskip)
 		dprint(("rec_skip: EOF at 0x%lx\n",
-			ftell(ctx->rec_ctx->tfile_tap->tp_fp)));
+			ftell(ctx->rec_ctx->tf_tap->tp_fp)));
 	ctx->rec_nleft = 0;
 }
 
@@ -74,7 +74,7 @@ int rec_getbytes(rec_ctx_t *ctx, unsigned char *buf, int nbytes)
 	nread = tfile_getbytes(ctx->rec_ctx, buf, nbytes);
 	if (nread != nbytes)
 		dprint(("rec_getbytes: EOF at 0x%lx\n",
-			ftell(ctx->rec_ctx->tfile_tap->tp_fp)));
+			ftell(ctx->rec_ctx->tf_tap->tp_fp)));
 	if (nread < 0)
 		return nread;
 	ctx->rec_nleft -= nread;
