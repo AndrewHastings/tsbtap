@@ -72,7 +72,7 @@ void tap_close(TAPE *tap)
 ssize_t tap_readblock(TAPE *tap, char **bufp)
 {
 	unsigned char sbuf[4];
-	ssize_t rv;
+	size_t rv;
 
 	*bufp = NULL;
 
@@ -86,14 +86,14 @@ ssize_t tap_readblock(TAPE *tap, char **bufp)
 	rv = fread(sbuf, 1, 4, tap->tp_fp);
 	if (rv < 4) {
 		dprint(("%s: tap_readblock: EOF reading header at 0x%lx\n",
-			tap->tp_path, ftell(tap->tp_fp)));
+			tap->tp_path, ftell(tap->tp_fp) - rv));
 		tap->tp_status |= TP_EOM;
 		return -1;
 	}
 	tap->tp_nbytes = LE32(sbuf);
 	if (tap->tp_nbytes == 0xffffffff) {
 		dprint(("%s: tap_readblock: end-of-medium marker at 0x%lx\n",
-			tap->tp_path, ftell(tap->tp_fp)));
+			tap->tp_path, ftell(tap->tp_fp) - 4));
 		tap->tp_status |= TP_EOM;
 		return -1;
 	}
@@ -106,14 +106,14 @@ ssize_t tap_readblock(TAPE *tap, char **bufp)
 	tap->tp_buf = realloc(tap->tp_buf, tap->tp_nbytes);
 	if (!tap->tp_buf) {
 		fprintf(stderr, "%s: block size %u too large, offset 0x%lx\n",
-			tap->tp_path, tap->tp_nbytes, ftell(tap->tp_fp));
+			tap->tp_path, tap->tp_nbytes, ftell(tap->tp_fp) - 4);
 		tap->tp_status |= TP_ERR;
 		return -2;
 	}
 	rv = fread(tap->tp_buf, 1, tap->tp_nbytes, tap->tp_fp);
 	if (rv != tap->tp_nbytes) {
 		fprintf(stderr, "%s: EOF reading %u bytes, offset 0x%lx\n",
-			tap->tp_path, tap->tp_nbytes, ftell(tap->tp_fp));
+			tap->tp_path, tap->tp_nbytes, ftell(tap->tp_fp) - rv);
 		tap->tp_status |= TP_ERR;
 		return -2;
 	}
@@ -123,7 +123,7 @@ ssize_t tap_readblock(TAPE *tap, char **bufp)
 	rv = fread(sbuf, 1, 4, tap->tp_fp);
 	if (rv < 4) {
 		fprintf(stderr, "%s: EOF reading trailer at offset 0x%lx\n",
-			tap->tp_path, ftell(tap->tp_fp));
+			tap->tp_path, ftell(tap->tp_fp) - 4);
 		tap->tp_status |= TP_EOM;
 		return tap->tp_nbytes;
 	}
@@ -131,7 +131,7 @@ ssize_t tap_readblock(TAPE *tap, char **bufp)
 		/* Some tape images omit the required even-byte padding. */
 		if (tap->tp_nbytes == LE32(sbuf)) {
 			dprint(("%s: tap_readblock: no padding at 0x%lx\n",
-				tap->tp_path, ftell(tap->tp_fp)));
+				tap->tp_path, ftell(tap->tp_fp) - 4));
 			return tap->tp_nbytes;
 		}
 
@@ -141,7 +141,7 @@ ssize_t tap_readblock(TAPE *tap, char **bufp)
 		if (rv < 1) {
 			fprintf(stderr,
 				"%s: EOF reading trailer, offset 0x%lx\n",
-				tap->tp_path, ftell(tap->tp_fp));
+				tap->tp_path, ftell(tap->tp_fp) - 1);
 			tap->tp_status |= TP_EOM;
 			return tap->tp_nbytes;
 		}
@@ -149,7 +149,7 @@ ssize_t tap_readblock(TAPE *tap, char **bufp)
 	if (tap->tp_nbytes != LE32(sbuf)) {
 		fprintf(stderr, "%s: trailer size %u (offset 0x%lx) "
 				"doesn't match header size %u\n",
-			tap->tp_path, LE32(sbuf), ftell(tap->tp_fp),
+			tap->tp_path, LE32(sbuf), ftell(tap->tp_fp) - 4,
 			tap->tp_nbytes);
 		tap->tp_status |= TP_ERR;
 	}
