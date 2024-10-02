@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "simtap.h"
+#include "sink.h"
 #include "tfilefmt.h"
 #include "tsbtap.h"
 

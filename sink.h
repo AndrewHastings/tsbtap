@@ -16,18 +16,28 @@
  */
 
 /*
- * Read HP2000 TSB dump tapes in SIMH tape image format.
+ * Routines for using a string or a file as an output sink.
  */
 
-#define dprint(x)	if (debug) printf x
+#ifndef _SINK_H
+#define _SINK_H 1
 
-#define BE16(bp)	(((bp)[0] << 8) | (bp)[1])
-#define MIN(a, b)	((a) < (b) ? (a) : (b))
+typedef struct {
+	FILE	*snk_fp;	/* file */
+	int	snk_nwrite;	/* file */
+	char	*snk_buf;	/* string */
+	char	*snk_bp;	/* string */
+	int	snk_nleft;	/* string */
+} SINK;
 
-extern int is_access;
-extern int ignore_errs;
-extern int debug;
-extern int verbose;
+static inline FILE *sink_getf(SINK *snp) { return snp->snk_fp; }
 
-extern void print_direntry(unsigned char *dbuf);
-extern void print_number(SINK *snp, unsigned char *buf);
+extern SINK *sink_initf(FILE *fp);
+extern SINK *sink_initstr(char *buf, int nbytes);
+extern int sink_printf(SINK *snp, char *fmt, ...);
+#pragma printflike sink_printf
+extern int sink_write(SINK *snp, char *buf, int nbytes);
+extern int sink_putc(int c, SINK *snp);
+extern int sink_fini(SINK *snp);
+
+#endif /* _SINK_H */

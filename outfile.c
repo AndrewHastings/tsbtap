@@ -30,8 +30,9 @@
 #include <errno.h>
 #undef _POSIX_C_SOURCE  /* I didn't set it; who did?? */
 #include <fnmatch.h>
-#include "tsbtap.h"
+#include "sink.h"
 #include "outfile.h"
+#include "tsbtap.h"
 
 int sout = 0;
 
@@ -110,15 +111,16 @@ void set_mtime(char *fname, struct tm *tm)
 
 
 /* actual file name returned in fname */
-FILE *out_open(char *name, char *sfx, char *fname)
+SINK *out_open(char *name, char *sfx, char *fname)
 {
 	int i;
 	char *sp;
-	FILE *rv;
+	FILE *fp;
+	SINK *rv = NULL;
 
 	if (sout) {
 		fname[0] = '\0';
-		return stdout;
+		return sink_initf(stdout);
 	}
 
 	sprintf(fname, "%s.%s", name, sfx);
@@ -135,8 +137,8 @@ FILE *out_open(char *name, char *sfx, char *fname)
 	}
 
 	for (i = 0; i < 100; i++) {
-		rv = fopen(fname, "wx");
-		if (rv) {
+		fp = fopen(fname, "wx");
+		if (fp) {
 			printf("Extracting to %s\n", fname);
 			break;
 		}
@@ -147,14 +149,22 @@ FILE *out_open(char *name, char *sfx, char *fname)
 		sprintf(fname, "%s.%d.%s", name, i+1, sfx);
 	}
 
+	if (fp) {
+		if (!(rv = sink_initf(fp))) {
+			fprintf(stderr, "Out of memory\n");
+			fclose(fp);
+		}
+	}
+
 	return rv;
 }
 
 
-void out_close(FILE *of)
+void out_close(SINK *snp)
 {
-	if (of == stdout)
-		return;
+	FILE *fp = sink_getf(snp);
 
-	fclose(of);
+	if (fp != stdout)
+		fclose(fp);
+	sink_fini(snp);
 }

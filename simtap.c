@@ -24,8 +24,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include "tsbtap.h"
 #include "simtap.h"
+#include "sink.h"
+#include "tsbtap.h"
 
 #define LE32(bp)	(((bp)[3] << 24) | ((bp)[2] << 16) | \
 			 ((bp)[1] << 8)  | (bp)[0])

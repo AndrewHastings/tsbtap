@@ -15,10 +15,10 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #
 
-CFLAGS=-g -fsanitize=address -Wno-trigraphs -Wunused-variable
+CFLAGS=-g -fsanitize=address -Werror -Wno-trigraphs -Wunused-variable
 
-HDRS = outfile.h simtap.h tfilefmt.h tsbfile.h tsbprog.h tsbtap.h
-OBJS = outfile.o simtap.o tfilefmt.o tsbfile.o tsbprog.o tsbtap.o
+HDRS = outfile.h simtap.h sink.h tfilefmt.h tsbfile.h tsbprog.h tsbtap.h
+OBJS = outfile.o simtap.o sink.o tfilefmt.o tsbfile.o tsbprog.o tsbtap.o
 LIBS = -lm
 
 tsbtap: $(OBJS)

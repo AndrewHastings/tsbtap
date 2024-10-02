@@ -24,8 +24,8 @@
 
 extern int sout;
 
-extern FILE *out_open(char *name, char *sfx, char *fname);
-extern void out_close(FILE *of);
+extern SINK *out_open(char *name, char *sfx, char *fname);
+extern void out_close(SINK *snp);
 extern char *name_match(char *pattern, char *id, char *name);
 extern int jdate_to_tm(int yr, int jday, struct tm *tm);
 extern void set_mtime(char *fname, struct tm *tm);

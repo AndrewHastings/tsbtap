@@ -26,8 +26,9 @@
 #include <time.h>
 #include <unistd.h>
 #include <assert.h>
-#include "outfile.h"
 #include "simtap.h"
+#include "sink.h"
+#include "outfile.h"
 #include "tfilefmt.h"
 #include "tsbprog.h"
 #include "tsbtap.h"
@@ -213,14 +214,14 @@ static char tsb2000f_fns[] = "?00TABLINSPATANATNEXPLOGABSSQRINTRNDSGNLENTYPTIM"
 			     "SINCOSBRK?23ZERCONIDNINVTRN?31?32?33?34?35?36?37";
 
 
-char *print_str_operand(FILE *fp, unsigned token, stmt_ctx_t *ctx)
+char *print_str_operand(SINK *snp, unsigned token, stmt_ctx_t *ctx)
 {
 	int len = token & 0xff;
 	int i, nread;
 	unsigned char c, *tbuf;
 
 	if (len == 0) {
-		fprintf(fp, "\"\"");
+		sink_printf(snp, "\"\"");
 		return NULL;
 	}
 
@@ -237,36 +238,37 @@ char *print_str_operand(FILE *fp, unsigned token, stmt_ctx_t *ctx)
 			c = tbuf[i];
 			if (c >= 32 && c < 127 && c != '"') {
 				if (!inquote)
-					putc('"', fp);
+					sink_putc('"', snp);
 				inquote = 1;
-				putc(c, fp);
+				sink_putc(c, snp);
 			} else {
 				if (inquote)
-					putc('"', fp);
+					sink_putc('"', snp);
 				inquote = 0;
-				fprintf(fp, "'%d", c);
+				sink_printf(snp, "'%d", c);
 			}
 		}
 		if (inquote)
-			putc('"', fp);
+			sink_putc('"', snp);
 
 	/* pre-Access: just print it */
 	} else {
-		fprintf(fp, "\"%.*s\"", len, tbuf);
+		sink_printf(snp, "\"%.*s\"", len, tbuf);
 	}
 
 	return NULL;
 }
 
 
-char *print_var_operand(FILE *fp, unsigned token)
+char *print_var_operand(SINK *snp, unsigned token)
 {
 	unsigned name = (token >> 4) & 0x1f;
 	unsigned type =  token       & 0xf;
 
 	/* string variable with digit 0 or 1 */
 	if (name > 032) {
-		fprintf(fp, "%c%d$", 'A' + ((token - 0xb0) & 0x1f), name > 034);
+		sink_printf(snp, "%c%d$", 'A' + ((token - 0xb0) & 0x1f),
+					  name > 034);
 		return NULL;
 	}
 
@@ -274,20 +276,20 @@ char *print_var_operand(FILE *fp, unsigned token)
 	    case 0:			/* string variable */
 		if (!name)		/* null operand */
 			break;
-		fprintf(fp, "%c$", '@' + name);
+		sink_printf(snp, "%c$", '@' + name);
 		break;
 
 	    case 1: case 2: case 3:	/* array variable */
 	    case 4:			/* simple variable, no digit */
-		fprintf(fp, "%c", '@' + name);
+		sink_printf(snp, "%c", '@' + name);
 		break;
 
 	    case 017:			/* user-defined function */
-		fprintf(fp, "FN%c", '@' + name);
+		sink_printf(snp, "FN%c", '@' + name);
 		break;
 
 	    default:			/* simple variable with digit 0-9 */
-		fprintf(fp, "%c%d", '@' + name, type - 5);
+		sink_printf(snp, "%c%d", '@' + name, type - 5);
 		break;
 	}
 
@@ -296,7 +298,7 @@ char *print_var_operand(FILE *fp, unsigned token)
 
 
 /* prog != NULL indicates CSAVEd */
-char *print_int_operand(FILE *fp, unsigned token, unsigned stmt,
+char *print_int_operand(SINK *snp, unsigned token, unsigned stmt,
 			int start, prog_ctx_t *prog, stmt_ctx_t *ctx)
 {
 	unsigned char *tbuf;
@@ -315,7 +317,7 @@ char *print_int_operand(FILE *fp, unsigned token, unsigned stmt,
 			err = "corrupted destination line number";
 		}
 	}
-	fprintf(fp, "%d", val);
+	sink_printf(snp, "%d", val);
 
 	if (is_dim || ((token >> 9) & 0x3f) == 043)	/* USING */
 		return err;
@@ -332,14 +334,14 @@ char *print_int_operand(FILE *fp, unsigned token, unsigned stmt,
 				err = "corrupted destination line number";
 			}
 		}
-		fprintf(fp, ",%d", val);
+		sink_printf(snp, ",%d", val);
 	}
 
 	return err;
 }
 
 
-char *print_other_operand(FILE *fp, unsigned token)
+char *print_other_operand(SINK *snp, unsigned token)
 {
 	char *fns = is_access > 0 ? access_fns : tsb2000f_fns;
 	unsigned name = (token >> 4) & 0x1f;
@@ -355,17 +357,17 @@ char *print_other_operand(FILE *fp, unsigned token)
 		break;
 
 	    case 4:			/* formal param, no digit */
-		fprintf(fp, "%c", '@' + name);
+		sink_printf(snp, "%c", '@' + name);
 		break;
 
 	    case 017:			/* built-in function */
-		fprintf(fp, "%.3s", fns + 3 * name);
+		sink_printf(snp, "%.3s", fns + 3 * name);
 		if (fns == access_fns && (name == 027 || name == 030))
-			fprintf(fp, "$");
+			sink_putc('$', snp);
 		break;
 
 	    default:			/* formal param with digit 0-9 */
-		fprintf(fp, "%c%d", '@' + name, type - 5);
+		sink_printf(snp, "%c%d", '@' + name, type - 5);
 		break;
 	}
 
@@ -384,7 +386,7 @@ char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname,
 	int symtab = 0;			/* offset in bytes */
 	int start = BE16(dbuf+8);	/* 16-bit words */
 	char *err = NULL;
-	FILE *fp;
+	SINK *snp;
 
 	dprint(("extract_program: %s\n", fn));
 
@@ -408,8 +410,8 @@ char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname,
 	} else
 		prog_setsz(&prog, len);
 
-	fp = out_open(fn, "bas", oname);
-	if (!fp) {
+	snp = out_open(fn, "bas", oname);
+	if (!snp) {
 		prog_fini(&prog);
 		return "";
 	}
@@ -427,10 +429,11 @@ char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname,
 				stmt_fini(&ctx);
 				break;
 			}
-			fprintf(fp, "*** Warning: lines out of order -- "
-				    "tape may be corrupted ***\n");
+			fprintf(sink_getf(snp),
+				"*** Warning: lines out of order -- "
+				"tape may be corrupted ***\n");
 		}
-		fprintf(fp, "%d ", lineno);
+		sink_printf(snp, "%d ", lineno);
 		prev_lineno = lineno;
 
 		while (stmt_getbytes(&ctx, &tbuf, 2) == 2) {
@@ -443,50 +446,52 @@ char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname,
 				(token >> 4) & 0x1f, token & 0xf,
 				ftell(tfile->tf_tap->tp_fp)));
 			space = name[0] && name[1] ? " " : "";
-			fprintf(fp, "%s%s", space, name);
+			sink_printf(snp, "%s%s", space, name);
 
 			/* save statement code; process special cases */
 			if (stmt < 0) {
 				stmt = op;
 				switch (op) {
 				    case 070:	/* FILES */
-					putc(' ', fp);
+					sink_putc(' ', snp);
 					/* fall thru */
 				    case 051:	/* REM */
 					if (token & 0xff)
-						putc(token & 0xff, fp);
+						sink_putc(token & 0xff, snp);
 					/* fall thru */
 				    case 044:	/* IMAGE */
 					while (nread = stmt_getbytes(&ctx,
 								&tbuf, 256)) {
 						if (!tbuf[nread-1])
 							nread--;
-						fwrite(tbuf, 1, nread, fp);
+						sink_write(snp, tbuf, nread);
 					}
 					goto next;
 				}
 			}
 
-			fprintf(fp, "%s", space);
+			sink_printf(snp, "%s", space);
 			if (token & 0x8000) {
 				unsigned type = token & 0xf;
 
 				if (type == 0) {	/* FP number */
-					if (stmt_getbytes(&ctx, &tbuf, 4) != 4)
-						return "number extends past "
-						       "end of statement";
-					print_number(fp, tbuf);
+					if (stmt_getbytes(&ctx, &tbuf, 4) != 4) {
+						err = "number extends past "
+						      "end of statement";
+						break;
+					}
+					print_number(snp, tbuf);
 
 				} else if (type == 3)	/* line # or DIM */
-					err = print_int_operand(fp,
+					err = print_int_operand(snp,
 							token, stmt, start,
 						symtab ? &prog : NULL, &ctx);
 
 				 else
-					err = print_other_operand(fp, token);
+					err = print_other_operand(snp, token);
 
 			} else if (op == 1) {
-				err = print_str_operand(fp, token, &ctx);
+				err = print_str_operand(snp, token, &ctx);
 
 			} else {
 				int idx = (token & 0x1ff);
@@ -500,7 +505,7 @@ char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname,
 					else
 						err = "corrupted symbol table";
 				}
-				(void) print_var_operand(fp, token);
+				(void) print_var_operand(snp, token);
 			}
 next:
 			/* Access: subsequent operators aren't stmt codes */
@@ -511,13 +516,13 @@ next:
 				break;
 		}
 
-		fprintf(fp, "\n");
+		sink_putc('\n', snp);
 		stmt_fini(&ctx);
 		if (err)
 			break;
 	}
 
-	out_close(fp);
+	out_close(snp);
 	prog_fini(&prog);
 
 	return err;
@@ -526,6 +531,7 @@ next:
 
 char *dump_program(tfile_ctx_t *tfile, char *fn, unsigned char *dbuf)
 {
+	SINK *snp;
 	prog_ctx_t prog;
 	unsigned char *buf;
 	unsigned off;
@@ -542,6 +548,7 @@ char *dump_program(tfile_ctx_t *tfile, char *fn, unsigned char *dbuf)
 
 	if (prog_init(&prog, tfile) < 0)
 		return "";
+	snp = sink_initf(stdout);
 
 	/* replace some op names for clarity */
 	for (i = 0; i < 0100; i++) {
@@ -572,13 +579,13 @@ char *dump_program(tfile_ctx_t *tfile, char *fn, unsigned char *dbuf)
 		    case -1:  nleft = val - 1; break;
 		}
 		nleft--;
-		printf("%s ", pfx);
+		sink_printf(snp, "%s ", pfx);
 
 		/* offset */
 		if (off & 0x7)
-			printf("     ");
+			sink_printf(snp, "     ");
 		else
-			printf("%5x", off);
+			sink_printf(snp, "%5x", off);
 
 		/* contents as hex and decimal */
 		pfx = sfx = "";
@@ -586,7 +593,7 @@ char *dump_program(tfile_ctx_t *tfile, char *fn, unsigned char *dbuf)
 			pfx = "\033[4m";
 			sfx = "\033[0m";
 		}
-		printf("  %04x (%s%5d%s)  ", val, pfx, val, sfx);
+		sink_printf(snp, "  %04x (%s%5d%s)  ", val, pfx, val, sfx);
 
 		/* contents as ASCII */
 		for (i = 0; i < 2; i++) {
@@ -594,11 +601,12 @@ char *dump_program(tfile_ctx_t *tfile, char *fn, unsigned char *dbuf)
 
 			if (c < 32 || c >= 127)
 				c = '.';
-			printf("%c%s", c, sfx);
+			sink_printf(snp, "%c%s", c, sfx);
 		}
 
 		/* contents as token codes */
-		printf("  %d-%2o-%2o-%2o  ", val >> 15, op, name, type);
+		sink_printf(snp, "  %d-%2o-%2o-%2o  ", val >> 15, op, name,
+						       type);
 
 		/* contents as operator name(s) */
 		pfx = sfx = "";
@@ -607,54 +615,55 @@ char *dump_program(tfile_ctx_t *tfile, char *fn, unsigned char *dbuf)
 			sfx = "\033[0m";
 		}
 		if (is_access > 0)
-			printf("%s%-7s%s|%-7s", pfx, access_stmts[op], sfx,
-						access_ops[op]);
+			sink_printf(snp, "%s%-7s%s|%-7s", pfx, access_stmts[op],							  sfx, access_ops[op]);
 		else
-			printf("%s%-7s%s", pfx, tsb2000f_ops[op], sfx);
+			sink_printf(snp, "%s%-7s%s", pfx, tsb2000f_ops[op], sfx);
 
 		/* contents as operand */
-		printf("  ");
+		sink_printf(snp, "  ");
 		if (val & 0x8000) {
 			switch (type) {
 			    case 0:
-				printf("(num)");
+				sink_printf(snp, "(num)");
 				break;
 
 			    case 3:
-				printf("(int)");
+				sink_printf(snp, "(int)");
 				break;
 
 			    default:
 				if (!name) {
-					printf("(par)");  /* fn param */
+					/* fn param */
+					sink_printf(snp, "(par)");
 					break;
 				}
 				/* fall thru */
 			    case 017:
-				(void) print_other_operand(stdout, val);
+				(void) print_other_operand(snp, val);
 				break;
 			}
 		} else if (op == 1) {
-			printf("(str)");
+			sink_printf(snp, "(str)");
 		} else {
 			if (name)
-				(void) print_var_operand(stdout, val);
+				(void) print_var_operand(snp, val);
 			else if (type)
-				printf("(var)");
+				sink_printf(snp, "(var)");
 			else
-				printf("     ");
+				sink_printf(snp, "     ");
 		}
 
 		/* contents as FP number */
 		if (prog_nleft(&prog) >= 2) {
-			printf("\t");
-			print_number(stdout, buf);
+			sink_putc('\t', snp);
+			print_number(snp, buf);
 		}
 
-		printf("\n");
+		sink_putc('\n', snp);
 		nused++;
 	}
 
+	sink_fini(snp);
 	prog_fini(&prog);
 
 	return NULL;

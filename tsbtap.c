@@ -29,8 +29,9 @@
 #include <unistd.h>
 #include <assert.h>
 #include <math.h>
-#include "outfile.h"
 #include "simtap.h"
+#include "sink.h"
+#include "outfile.h"
 #include "tfilefmt.h"
 #include "tsbfile.h"
 #include "tsbprog.h"
@@ -420,7 +421,7 @@ next:
  */
 
 
-void print_number(FILE *fp, unsigned char *buf)
+void print_number(SINK *snp, unsigned char *buf)
 {
 	char sbuf[32], *sp = sbuf;
 	int e;
@@ -441,7 +442,7 @@ void print_number(FILE *fp, unsigned char *buf)
 	/* Convert to string, advance past leading '-' */
 	sprintf(sp, "%G", val);
 	if (*sp == '-')
-		putc(*sp++, fp);
+		sink_putc(*sp++, snp);
 
 	/* Special case "0.*" */
 	if (sp[0] == '0' && sp[1] == '.') {
@@ -451,8 +452,8 @@ void print_number(FILE *fp, unsigned char *buf)
 			e = 1;
 			for (sp++; *sp == '0'; sp++)
 				e++;
-			putc(*sp++, fp);
-			fprintf(fp, ".%sE-%02d", sp, e);
+			sink_putc(*sp++, snp);
+			sink_printf(snp, ".%sE-%02d", sp, e);
 			*sp = '\0';	/* nothing else to print */
 
 		}
@@ -461,26 +462,26 @@ void print_number(FILE *fp, unsigned char *buf)
 	} else if (sp[1] == 'E') {
 		/* small negative exp: print as decimal, not 'E' format */
 		if (sp[2] == '-' && sp[3] == '0' && sp[4] < '7') {
-			putc('.', fp);
+			sink_putc('.', snp);
 			for (e = sp[4]-'0'; e > 1; e--)
-				putc('0', fp);
+				sink_putc('0', snp);
 			sp[1] = '\0';	/* delete "E*" */
 
 		/* otherwise, insert '.' between initial digit and 'E' */
 		} else {
-			putc(*sp++, fp);
-			putc('.', fp);
+			sink_putc(*sp++, snp);
+			sink_putc('.', snp);
 		}
 	}
 
 	/* Print remaining part of conversion to string */
-	fprintf(fp, "%s", sp);
+	sink_printf(snp, "%s", sp);
 
 	/* Append '.' to some large integers */
 	if (!strchr(sp, '.')) {
 		val = fabs(val);
 		if (val > 32767 && val < 1000000)
-			putc('.', fp);
+			sink_putc('.', snp);
 	}
 }
 

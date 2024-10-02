@@ -25,8 +25,9 @@
 #include <time.h>
 #include <unistd.h>
 #include <assert.h>
-#include "outfile.h"
 #include "simtap.h"
+#include "sink.h"
+#include "outfile.h"
 #include "tfilefmt.h"
 #include "tsbtap.h"
 
@@ -85,7 +86,7 @@ int rec_getbytes(rec_ctx_t *ctx, unsigned char *buf, int nbytes)
 char *extract_ascii_file(tfile_ctx_t *tfile, char *fn, char *oname,
 			 unsigned char *dbuf)
 {
-	FILE *fp;
+	SINK *snp;
 	unsigned char buf[512];
 	char *err = NULL;
 	int rv = 0;
@@ -99,8 +100,8 @@ char *extract_ascii_file(tfile_ctx_t *tfile, char *fn, char *oname,
 		return "";
 	}
 
-	fp = out_open(fn, "txt", oname);
-	if (!fp)
+	snp = out_open(fn, "txt", oname);
+	if (!snp)
 		return "";
 
 	dprint(("extract_ascii_file: %s\n", fn));
@@ -130,13 +131,13 @@ char *extract_ascii_file(tfile_ctx_t *tfile, char *fn, char *oname,
 				break;
 			}
 
-			if (fwrite(buf, 1, stlen, fp) != stlen) {
+			if (sink_write(snp, buf, stlen) != stlen) {
 				perror(oname);
 				err = "";
 				break;
 			}
 
-			putc('\n', fp);
+			sink_putc('\n', snp);
 		}
 
 		if (err)
@@ -145,7 +146,7 @@ char *extract_ascii_file(tfile_ctx_t *tfile, char *fn, char *oname,
 		rec_skip(&ctx);
 	}
 
-	out_close(fp);
+	out_close(snp);
 	return err;
 }
 
@@ -153,14 +154,14 @@ char *extract_ascii_file(tfile_ctx_t *tfile, char *fn, char *oname,
 char *extract_basic_file(tfile_ctx_t *tfile, char *fn, char *oname,
 			 unsigned char *dbuf)
 {
-	FILE *fp;
+	SINK *snp;
 	unsigned char buf[512];
 	char *err = NULL;
 	int rv = 0;
 	int recsz = BE16(dbuf+8);
 
-	fp = out_open(fn, "csv", oname);
-	if (!fp)
+	snp = out_open(fn, "csv", oname);
+	if (!snp)
 		return "";
 
 	dprint(("extract_basic_file: %s\n", fn));
@@ -179,7 +180,7 @@ char *extract_basic_file(tfile_ctx_t *tfile, char *fn, char *oname,
 
 			/* EOF marker or end-of-record */
 			if (code == 0xffff) {
-				fprintf(fp, "%s END", sep);
+				sink_printf(snp, "%s END", sep);
 				break;
 			}
 			if (code == 0xfffe)
@@ -197,27 +198,27 @@ char *extract_basic_file(tfile_ctx_t *tfile, char *fn, char *oname,
 					break;
 				}
 
-				fprintf(fp, "%s\"", sep);
+				sink_printf(snp, "%s\"", sep);
 				for (i = 0; i < stlen; i++) {
 					switch (c = buf[i]) {
 					    case '"':
-						fprintf(fp, "\"\"");
+						sink_printf(snp, "\"\"");
 						break;
 
 					    case '\0':
-						fprintf(fp, "\\000");
+						sink_printf(snp, "\\000");
 						break;
 
 					    case '\n':
-						fprintf(fp, "\\n");
+						sink_printf(snp, "\\n");
 						break;
 
 					    default:
-						putc(c, fp);
+						sink_putc(c, snp);
 						break;
 					}
 				}
-				putc('"', fp);
+				sink_putc('"', snp);
 				continue;
 			}
 
@@ -232,8 +233,8 @@ char *extract_basic_file(tfile_ctx_t *tfile, char *fn, char *oname,
 				err = "number extends past end of record";
 				break;
 			}
-			fprintf(fp, "%s", sep);
-			print_number(fp, buf);
+			sink_printf(snp, "%s", sep);
+			print_number(snp, buf);
 		}
 
 		if (err)
@@ -241,9 +242,9 @@ char *extract_basic_file(tfile_ctx_t *tfile, char *fn, char *oname,
 
 		rec_skip(&ctx);
 		if (rv >= 0)
-			putc('\n', fp);
+			sink_putc('\n', snp);
 	}
 
-	out_close(fp);
+	out_close(snp);
 	return err;
 }
