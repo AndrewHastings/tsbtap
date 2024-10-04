@@ -419,9 +419,13 @@ char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname,
 
 		dprint(("extract_program: line %d\n", lineno));
 		if (lineno > 9999 || lineno <= prev_lineno) {
-			err = "lines out of order";
-			stmt_fini(&ctx);
-			break;
+			if (!ignore_errs) {
+				err = "lines out of order";
+				stmt_fini(&ctx);
+				break;
+			}
+			fprintf(fp, "*** Warning: lines out of order -- "
+				    "tape may be corrupted ***\n");
 		}
 		fprintf(fp, "%d ", lineno);
 		prev_lineno = lineno;

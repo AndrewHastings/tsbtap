@@ -40,6 +40,7 @@
 #define ACCESS_OSLVL	5000	/* TBD: find actual value */
 
 int is_access = -1;
+int ignore_errs = 0;
 int debug = 0;
 int verbose = 0;
 
@@ -589,7 +590,7 @@ char *prog;
 
 void usage(int ec)
 {
-	fprintf(stderr, "Usage: %s [-aOv] -f path.tap [-r | -t | -d files... | -x files...]\n",
+	fprintf(stderr, "Usage: %s [-aeOv] -f path.tap [-r | -t | -d files... | -x files...]\n",
 		prog);
 	fprintf(stderr, " -f   file in SIMH tape format (required)\n");
 	fprintf(stderr, "operations:\n");
@@ -599,6 +600,7 @@ void usage(int ec)
 	fprintf(stderr, " -x   extract files from tape\n");
 	fprintf(stderr, "modifiers:\n");
 	fprintf(stderr, " -a   ACCESS system tape (default no, or from OS level if found on tape)\n");
+	fprintf(stderr, " -e   ignore certain errors when extracting\n");
 	fprintf(stderr, " -O   extract to stdout (default write to file)\n");
 	fprintf(stderr, " -v   verbose output\n");
 	fprintf(stderr, " -vv  more verbose output\n");
@@ -621,7 +623,7 @@ void main(int argc, char **argv)
 	prog = strrchr(argv[0], '/');
 	prog = prog ? prog+1 : argv[0];
 
-	while ((c = getopt(argc, argv, "aDdf:Ohrtvx")) != -1) {
+	while ((c = getopt(argc, argv, "aDdef:Ohrtvx")) != -1) {
 		switch (c) {
 		    case 'a':
 			is_access = 1;
@@ -633,6 +635,10 @@ void main(int argc, char **argv)
 
 		    case 'd':
 			op |= OP_D;
+			break;
+
+		    case 'e':
+			ignore_errs++;
 			break;
 
 		    case 'f':

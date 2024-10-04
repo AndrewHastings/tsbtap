@@ -25,6 +25,7 @@
 #define MIN(a, b)	((a) < (b) ? (a) : (b))
 
 extern int is_access;
+extern int ignore_errs;
 extern int debug;
 extern int verbose;
 
