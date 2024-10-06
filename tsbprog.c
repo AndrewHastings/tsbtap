@@ -34,13 +34,16 @@
 #include "tsbtap.h"
 
 
-typedef struct {
-	unsigned char	*pg_buf;
-	unsigned char	*pg_bp;		/* sequential read position */
-	int		pg_sz;		/* program text w/out symtab */
-	int		pg_nread;	/* total read from tape */
-} prog_ctx_t;
-
+/*
+ * In-between the calls to prog_init(), prog_fini():
+ * - prog_ctx_t can be saved and restored to move to an earlier position
+ *   in the program text.
+ * - The buffer provided by prog_getbytes can be modified in-place, to
+ *   affect subsequent re-reads of the same part of the program text.
+ * This allows CSAVEd programs to be un-CSAVEd in-place. It also allows
+ * a conversion between 2000 TSB versions to re-interpret a statement if
+ * an unsupported token is encountered mid-statement.
+ */
 
 int prog_init(prog_ctx_t *prog, tfile_ctx_t *tfile)
 {
@@ -99,7 +102,7 @@ int prog_nleft(prog_ctx_t *prog)
 }
 
 
-/* read bytes sequentially up to pg_sz. not affected by prog_getbytesat */
+/* access bytes sequentially up to pg_sz. not affected by prog_getbytesat */
 int prog_getbytes(prog_ctx_t *prog, unsigned char **bufp, int nbytes)
 {
 	int readsz, nleft;
@@ -133,12 +136,6 @@ void prog_fini(prog_ctx_t *prog)
 }
 
 
-typedef struct {
-	prog_ctx_t	*st_ctx;
-	int		st_nleft;	/* in bytes */
-} stmt_ctx_t;
-
-
 /* returns TSB line number, -1 if error */
 int stmt_init(stmt_ctx_t *ctx, prog_ctx_t *prog)
 {
@@ -157,7 +154,7 @@ int stmt_init(stmt_ctx_t *ctx, prog_ctx_t *prog)
 }
 
 
-/* returns number of bytes copied. nbytes must be even */
+/* returns number of bytes accessible. nbytes must be even */
 int stmt_getbytes(stmt_ctx_t *ctx, unsigned char **buf, int nbytes)
 {
 	int nread;
@@ -297,45 +294,22 @@ char *print_var_operand(SINK *snp, unsigned token)
 }
 
 
-/* prog != NULL indicates CSAVEd */
 char *print_int_operand(SINK *snp, unsigned token, unsigned stmt,
-			int start, prog_ctx_t *prog, stmt_ctx_t *ctx)
+			stmt_ctx_t *ctx)
 {
 	unsigned char *tbuf;
 	char *err = NULL;
-	int val;
 	int is_dim = (stmt == 045 || stmt == 047);	/* COM, DIM */
 
 	if (stmt_getbytes(ctx, &tbuf, 2) != 2)
 		return "value extends past end of statement";
-	val = BE16(tbuf);
-	if (prog && !is_dim) {		/* if CSAVEd, get dest lineno */
-		if (prog_getbytesat(prog, &tbuf, 2, (val - start) * 2) == 2)
-			val = BE16(tbuf);
-		else {
-			dprint(("print_int_operand: offset bad 0x%04x\n", val));
-			err = "corrupted destination line number";
-		}
-	}
-	sink_printf(snp, "%d", val);
+	sink_printf(snp, "%d", BE16(tbuf));
 
 	if (is_dim || ((token >> 9) & 0x3f) == 043)	/* USING */
 		return err;
 
-	while (stmt_getbytes(ctx, &tbuf, 2) == 2) {	/* GOTO/GOSUB OF */
-		val = BE16(tbuf);
-		if (prog) {		/* if CSAVEd, get dest lineno */
-			if (prog_getbytesat(prog, &tbuf, 2, (val - start) * 2)
-									  == 2)
-				val = BE16(tbuf);
-			else {
-				dprint(("print_int_operand: bad offset "
-					"0x%04x\n", val));
-				err = "corrupted destination line number";
-			}
-		}
-		sink_printf(snp, ",%d", val);
-	}
+	while (stmt_getbytes(ctx, &tbuf, 2) == 2)	/* GOTO/GOSUB OF */
+		sink_printf(snp, ",%d", BE16(tbuf));
 
 	return err;
 }
@@ -375,16 +349,160 @@ char *print_other_operand(SINK *snp, unsigned token)
 }
 
 
+char *un_csave(prog_ctx_t *prog, unsigned char *dbuf)
+{
+	prog_ctx_t save_prog;
+	stmt_ctx_t ctx;
+	int lineno;			/* for debugging */
+	char *err = NULL;
+	unsigned char *buf;
+	int len = 2 * -(int16_t) BE16(dbuf+22);
+	int symptr = is_access > 0 ? 12 : 14;
+	int symtab = 0;			/* offset in bytes */
+	int start = BE16(dbuf+8);	/* 16-bit words */
+
+	if (prog_getbytesat(prog, &buf, 2, len - symptr) == 2)
+		symtab = (BE16(buf) - start) * 2;
+	else
+		return "can't find symtab for CSAVEd program";
+	if (symtab <= 0)
+		return "invalid symtab addr for CSAVEd program";
+	prog_setsz(prog, symtab);
+	save_prog = *prog;
+
+	while ((lineno = stmt_init(&ctx, prog)) >= 0) {
+		unsigned char *tbuf;
+		int stmt = -1;
+
+		dprint(("un_csave: line %d\n", lineno));
+		while (stmt_getbytes(&ctx, &tbuf, 2) == 2) {
+			unsigned char *nbuf;
+			unsigned token = BE16(tbuf);
+			unsigned op = (token >> 9) & 0x3f;
+
+			dprint(("un_csave: 0x%04x <%d,0%02o,0%o,0%o>\n",
+				token, token >> 15, op,
+				(token >> 4) & 0x1f, token & 0xf));
+
+			/* save statement code; process special cases */
+			if (stmt < 0) {
+				stmt = op;
+				switch (op) {
+				    case 070:	/* FILES */
+				    case 051:	/* REM */
+				    case 044:	/* IMAGE */
+					/* consume rest of stmt */
+					while (stmt_getbytes(&ctx, &nbuf, 256))
+						;
+					continue;
+				}
+			}
+
+			/* number, parameter, or built-in function */
+			if (token & 0x8000) {
+				unsigned type = token & 0xf;
+				int val;
+
+				/* FP number: consume and continue */
+				if (type == 0) {
+					if (stmt_getbytes(&ctx, &tbuf, 4) != 4) {
+						err = "number extends past "
+						      "end of statement";
+						break;
+					}
+					continue;
+				}
+
+				/* not an int: done */
+				if (type != 3)
+					continue;
+
+				/* integer: consume, then handle below */
+				if (stmt_getbytes(&ctx, &tbuf, 2) != 2) {
+					err = "value extends past "
+					      "end of statement";
+					break;
+				}
+
+				/* COM or DIM: done */
+				if (stmt == 045 || stmt == 047)
+					continue;
+
+				/* else, replace with dest lineno */
+				val = BE16(tbuf);
+				if (prog_getbytesat(prog, &nbuf, 2,
+						    (val - start) * 2) == 2) {
+					tbuf[0] = nbuf[0];
+					tbuf[1] = nbuf[1];
+				} else {
+					dprint(("un_csave: dest %d\n",
+						val - start));
+					err = "corrupted destination "
+					      "line number";
+				}
+
+				/* USING: only one lineno, done */
+				if (op == 043) {
+					dprint(("un_csave: USING\n"));
+					continue;
+				}
+
+				/* GOTO/GOSUB OF: replace all dest linenos */
+				dprint(("un_csave: GOTO OF\n"));
+				while (stmt_getbytes(&ctx, &tbuf, 2) == 2) {
+					val = BE16(tbuf);
+					if (prog_getbytesat(prog, &nbuf, 2,
+						     (val - start) * 2) == 2) {
+						tbuf[0] = nbuf[0];
+						tbuf[1] = nbuf[1];
+					} else {
+						dprint(("un_csave: dest %d\n",
+							val - start));
+						err = "corrupted destination "
+						      "line number";
+					}
+				}
+
+			/* string: consume even number of bytes */
+			} else if (op == 1) {
+				int nread = ((token & 0xff) + 1) & ~1;
+				if (stmt_getbytes(&ctx, &nbuf, nread) != nread) {
+					err = "string extends past "
+					      "end of statement";
+					break;
+				}
+
+			/* variable or user function: replace w/symtab name */
+			} else {
+				int idx = token & 0x1ff;
+
+				if (idx) {
+					if (prog_getbytesat(prog, &nbuf, 2,
+						  symtab + 4 * (idx-1)) == 2) {
+						tbuf[0] = (tbuf[0] & ~1) |
+							  (nbuf[0] & 1);
+						tbuf[1] = nbuf[1];
+					} else
+						err = "corrupted symbol table";
+				}
+			}
+		}
+
+		stmt_fini(&ctx);
+	}
+
+	/* return to start of program */
+	*prog = save_prog;
+	return err;
+}
+
+
 char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname,
 		      unsigned char *dbuf)
 {
 	prog_ctx_t prog;
 	stmt_ctx_t ctx;
-	int len = 2 * -(int16_t) BE16(dbuf+22);
 	int lineno, prev_lineno = 0;
-	int symptr = is_access > 0 ? 12 : 14;
-	int symtab = 0;			/* offset in bytes */
-	int start = BE16(dbuf+8);	/* 16-bit words */
 	char *err = NULL;
 	SINK *snp;
 
@@ -394,21 +512,13 @@ char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname,
 		return "";
 
 	if (dbuf[6] & 0x80) {	/* CSAVEd */
-		unsigned char *buf;
-
-		if (prog_getbytesat(&prog, &buf, 2, len - symptr) == 2)
-			symtab = (BE16(buf) - start) * 2;
-		else
-			err = "can't find symtab for CSAVEd program";
-		if (symtab <= 0)
-			err = "invalid symtab addr for CSAVEd program";
+		err = un_csave(&prog, dbuf);
 		if (err) {
 			prog_fini(&prog);
 			return err;
 		}
-		prog_setsz(&prog, symtab);
 	} else
-		prog_setsz(&prog, len);
+		prog_setsz(&prog, 2 * -(int16_t) BE16(dbuf+22));
 
 	snp = out_open(fn, "bas", oname);
 	if (!snp) {
@@ -441,10 +551,9 @@ char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname,
 			unsigned op = (token >> 9) & 0x3f;
 			char *space, *name = opnames[op];
 
-			dprint(("extract_program: 0x%04x <%d,0%02o,0%o,0%o> "
-				"@ 0x%lx\n", token, token >> 15, op,
-				(token >> 4) & 0x1f, token & 0xf,
-				ftell(tfile->tf_tap->tp_fp)));
+			dprint(("extract_program: 0x%04x <%d,0%02o,0%o,0%o>\n",
+				token, token >> 15, op,
+				(token >> 4) & 0x1f, token & 0xf));
 			space = name[0] && name[1] ? " " : "";
 			sink_printf(snp, "%s%s", space, name);
 
@@ -483,9 +592,8 @@ char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname,
 					print_number(snp, tbuf);
 
 				} else if (type == 3)	/* line # or DIM */
-					err = print_int_operand(snp,
-							token, stmt, start,
-						symtab ? &prog : NULL, &ctx);
+					err = print_int_operand(snp, token,
+								stmt, &ctx);
 
 				 else
 					err = print_other_operand(snp, token);
@@ -494,17 +602,6 @@ char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname,
 				err = print_str_operand(snp, token, &ctx);
 
 			} else {
-				int idx = (token & 0x1ff);
-
-				/* if CSAVEd, get var name from symtab */
-				if (symtab && idx) {
-					if (prog_getbytesat(&prog, &tbuf, 2,
-							symtab + 4 * (idx-1))
-									== 2)
-						token = BE16(tbuf);
-					else
-						err = "corrupted symbol table";
-				}
 				(void) print_var_operand(snp, token);
 			}
 next:
@@ -648,7 +745,7 @@ char *dump_program(tfile_ctx_t *tfile, char *fn, unsigned char *dbuf)
 			if (name)
 				(void) print_var_operand(snp, val);
 			else if (type)
-				sink_printf(snp, "(var)");
+				sink_printf(snp, "(@var)");
 			else
 				sink_printf(snp, "     ");
 		}
