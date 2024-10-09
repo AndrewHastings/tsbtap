@@ -349,6 +349,85 @@ char *print_other_operand(SINK *snp, unsigned token)
 }
 
 
+char *print_stmt(SINK *snp, stmt_ctx_t *ctx)
+{
+	unsigned char *tbuf;
+	char *err = NULL;
+	int stmt = -1;
+	int nread;
+	char **opnames = is_access > 0 ? access_stmts : tsb2000f_ops;
+
+	while (stmt_getbytes(ctx, &tbuf, 2) == 2) {
+		unsigned token = BE16(tbuf);
+		unsigned op = (token >> 9) & 0x3f;
+		char *space, *name = opnames[op];
+
+		dprint(("print_stmt: 0x%04x <%d,0%02o,0%o,0%o>\n",
+			token, token >> 15, op,
+			(token >> 4) & 0x1f, token & 0xf));
+		space = name[0] && name[1] ? " " : "";
+		sink_printf(snp, "%s%s", space, name);
+
+		/* save statement code; process special cases */
+		if (stmt < 0) {
+			stmt = op;
+			switch (op) {
+			    case 070:		/* FILES */
+				sink_putc(' ', snp);
+				/* fall thru */
+			    case 051:		/* REM */
+				if (token & 0xff)
+					sink_putc(token & 0xff, snp);
+				/* fall thru */
+			    case 044:		/* IMAGE */
+				while (nread = stmt_getbytes(ctx,
+							&tbuf, 256)) {
+					if (!tbuf[nread-1])
+						nread--;
+					sink_write(snp, tbuf, nread);
+				}
+				goto next;
+			}
+		}
+
+		sink_printf(snp, "%s", space);
+		if (token & 0x8000) {
+			unsigned type = token & 0xf;
+
+			if (type == 0) {	/* FP number */
+				if (stmt_getbytes(ctx, &tbuf, 4) != 4) {
+					err = "number extends past "
+					      "end of statement";
+					break;
+				}
+				print_number(snp, tbuf);
+
+			} else if (type == 3)	/* line # or DIM */
+				err = print_int_operand(snp, token,
+							stmt, ctx);
+
+			 else
+				err = print_other_operand(snp, token);
+
+		} else if (op == 1) {
+			err = print_str_operand(snp, token, ctx);
+
+		} else {
+			err = print_var_operand(snp, token);
+		}
+next:
+		/* Access: subsequent operators aren't stmt codes */
+		if (is_access > 0)
+			opnames = access_ops;
+
+		if (err)
+			break;
+	}
+
+	return err;
+}
+
+
 char *un_csave(prog_ctx_t *prog, unsigned char *dbuf)
 {
 	prog_ctx_t save_prog;
@@ -527,10 +606,6 @@ char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname,
 	}
 
 	while ((lineno = stmt_init(&ctx, &prog)) >= 0) {
-		unsigned char *tbuf;
-		int stmt = -1;
-		int nread;
-		char **opnames = is_access > 0 ? access_stmts : tsb2000f_ops;
 
 		dprint(("extract_program: line %d\n", lineno));
 		if (lineno > 9999 || lineno <= prev_lineno) {
@@ -546,72 +621,7 @@ char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname,
 		sink_printf(snp, "%d ", lineno);
 		prev_lineno = lineno;
 
-		while (stmt_getbytes(&ctx, &tbuf, 2) == 2) {
-			unsigned token = BE16(tbuf);
-			unsigned op = (token >> 9) & 0x3f;
-			char *space, *name = opnames[op];
-
-			dprint(("extract_program: 0x%04x <%d,0%02o,0%o,0%o>\n",
-				token, token >> 15, op,
-				(token >> 4) & 0x1f, token & 0xf));
-			space = name[0] && name[1] ? " " : "";
-			sink_printf(snp, "%s%s", space, name);
-
-			/* save statement code; process special cases */
-			if (stmt < 0) {
-				stmt = op;
-				switch (op) {
-				    case 070:	/* FILES */
-					sink_putc(' ', snp);
-					/* fall thru */
-				    case 051:	/* REM */
-					if (token & 0xff)
-						sink_putc(token & 0xff, snp);
-					/* fall thru */
-				    case 044:	/* IMAGE */
-					while (nread = stmt_getbytes(&ctx,
-								&tbuf, 256)) {
-						if (!tbuf[nread-1])
-							nread--;
-						sink_write(snp, tbuf, nread);
-					}
-					goto next;
-				}
-			}
-
-			sink_printf(snp, "%s", space);
-			if (token & 0x8000) {
-				unsigned type = token & 0xf;
-
-				if (type == 0) {	/* FP number */
-					if (stmt_getbytes(&ctx, &tbuf, 4) != 4) {
-						err = "number extends past "
-						      "end of statement";
-						break;
-					}
-					print_number(snp, tbuf);
-
-				} else if (type == 3)	/* line # or DIM */
-					err = print_int_operand(snp, token,
-								stmt, &ctx);
-
-				 else
-					err = print_other_operand(snp, token);
-
-			} else if (op == 1) {
-				err = print_str_operand(snp, token, &ctx);
-
-			} else {
-				(void) print_var_operand(snp, token);
-			}
-next:
-			/* Access: subsequent operators aren't stmt codes */
-			if (is_access > 0)
-				opnames = access_ops;
-
-			if (err)
-				break;
-		}
+		err = print_stmt(snp, &ctx);
 
 		sink_putc('\n', snp);
 		stmt_fini(&ctx);

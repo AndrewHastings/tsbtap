@@ -46,6 +46,7 @@ extern int stmt_init(stmt_ctx_t *ctx, prog_ctx_t *prog);
 extern int stmt_getbytes(stmt_ctx_t *ctx, unsigned char **buf, int nbytes);
 extern void stmt_fini(stmt_ctx_t *ctx);
 
+extern char *print_stmt(SINK *snp, stmt_ctx_t *ctx);
 extern char *un_csave(prog_ctx_t *prog, unsigned char *dbuf);
 extern char *dump_program(tfile_ctx_t *tfile, char *fn, unsigned char *dbuf);
 extern char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname,
