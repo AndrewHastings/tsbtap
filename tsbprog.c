@@ -208,6 +208,10 @@ static char *tsb2000f_ops[] = {
 	"END", "STOP", "DATA", "INPUT", "READ", "PRINT", "RESTORE", "MAT",
 	"FILES", "CHAIN", "ENTER", " " /* (LET) */, "OF", "THEN", "TO", "STEP"
 };
+static char access_fns[] = "CTLTABLINSPATANATNEXPLOGABSSQRINTRNDSGNLENTYPTIM"
+			   "SINCOSBRKITMRECNUMPOSCHRUPSSYS?32ZERCONIDNINVTRN";
+static char tsb2000f_fns[] = "?00TABLINSPATANATNEXPLOGABSSQRINTRNDSGNLENTYPTIM"
+			     "SINCOSBRK?23ZERCONIDNINVTRN?31?32?33?34?35?36?37";
 
 
 char *print_str_operand(FILE *fp, unsigned token, stmt_ctx_t *ctx)
@@ -338,8 +342,7 @@ char *print_int_operand(FILE *fp, unsigned token, unsigned stmt,
 
 char *print_other_operand(FILE *fp, unsigned token)
 {
-	static char fns[] = "CTLTABLINSPATANATNEXPLOGABSSQRINTRNDSGNLENTYPTIM"
-			    "SINCOSBRKITMRECNUMPOSCHRUPSSYS?32ZERCONIDNINVTRN";
+	char *fns = is_access > 0 ? access_fns : tsb2000f_fns;
 	unsigned name = (token >> 4) & 0x1f;
 	unsigned type =  token       & 0xf;
 
@@ -358,7 +361,7 @@ char *print_other_operand(FILE *fp, unsigned token)
 
 	    case 017:			/* built-in function */
 		fprintf(fp, "%.3s", fns + 3 * name);
-		if (name == 027 || name == 030)
+		if (fns == access_fns && (name == 027 || name == 030))
 			fprintf(fp, "$");
 		break;
 
@@ -378,6 +381,7 @@ char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname,
 	stmt_ctx_t ctx;
 	int len = 2 * -(int16_t) BE16(dbuf+22);
 	int lineno, prev_lineno = 0;
+	int symptr = is_access > 0 ? 12 : 14;
 	int symtab = 0;			/* offset in bytes */
 	int start = BE16(dbuf+8);	/* 16-bit words */
 	char *err = NULL;
@@ -391,7 +395,7 @@ char *extract_program(tfile_ctx_t *tfile, char *fn, char *oname,
 	if (dbuf[6] & 0x80) {	/* CSAVEd */
 		unsigned char *buf;
 
-		if (prog_getbytesat(&prog, &buf, 2, len - 12) == 2)
+		if (prog_getbytesat(&prog, &buf, 2, len - symptr) == 2)
 			symtab = (BE16(buf) - start) * 2;
 		else
 			err = "can't find symtab for CSAVEd program";
