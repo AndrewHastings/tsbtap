@@ -236,9 +236,10 @@ next:
  * -t: catalog the tape.
  */
 
+static char mos[] = "JanFebMarAprMayJunJulAugSepOctNovDec???";
+
 void print_date(int yr, int jday)
 {
-	static char mos[] = "JanFebMarAprMayJunJulAugSepOctNovDec???";
 	struct tm tm;
 
 	if (jdate_to_tm(yr, jday, &tm) < 0) {
@@ -307,12 +308,24 @@ void print_direntry(unsigned char *dbuf)
 
 	if (verbose) {
 		unsigned adate = BE16(dbuf+10);
+		int yr = adate >> 9;
+		int jday = adate & 0x1ff;
 
 		printf("  ");
-		print_date(adate >> 9, adate & 0x1ff);
+		print_date(yr, jday);
 
-		if (verbose > 1)
+		if (verbose > 1) {
+			unsigned mjday = BE16(dbuf+12) / 24;
+			struct tm tm;
+
+			if (jdate_to_tm(mjday <= jday ? yr
+						      : yr-1, mjday, &tm) < 0)
+				printf(" ??-???");
+			else
+				printf(" %2d-%.3s", tm.tm_mday,
+						    mos + 3*tm.tm_mon);
 			printf(" flags=0x%04x", flags);
+		}
 
 		if (dbuf[4] & 0x80)
 			printf(" recsz=%d", BE16(dbuf+8));

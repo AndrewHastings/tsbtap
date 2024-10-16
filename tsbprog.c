@@ -642,19 +642,27 @@ char *dump_program(tfile_ctx_t *tfile, char *fn, unsigned char *dbuf)
 	prog_ctx_t prog;
 	unsigned char *buf;
 	unsigned off;
+	int start = BE16(dbuf+8);		/* 16-bit word offsets */
+	int len = -(int16_t) BE16(dbuf+22);
+	int symtab = len;
+	int symptr = is_access > 0 ? 12 : 14;	/* byte offset */
 	int i, uid = BE16(dbuf);
-	int nused = 0, nleft = 0;	/* words in statement */
+	int nused = 0, nleft = 0;		/* words in statement */
 
 	dprint(("dump_program: %s\n", fn));
 
 	printf("\n%c%03d/", '@' + (uid >> 10), uid & 0x3ff);
 	print_direntry(dbuf);
-	printf(" len=0x%04x start=0x%04x disk=0x%04x%04x\n",
-	       -(int16_t) BE16(dbuf+22), BE16(dbuf+8),
-	       BE16(dbuf+16), BE16(dbuf+18));
+	printf(" start=0x%04x ldr=0x%04x disk=0x%04x%04x\n",
+	       start, BE16(dbuf+20), BE16(dbuf+16), BE16(dbuf+18));
 
 	if (prog_init(&prog, tfile) < 0)
 		return "";
+	if (prog_getbytesat(&prog, &buf, 2, len*2 - symptr) == 2)
+		symtab = BE16(buf) - start;
+	if (symtab < 0 || symtab > len)
+		symtab = len;
+
 	snp = sink_initf(stdout);
 
 	/* replace some op names for clarity */
@@ -678,14 +686,17 @@ char *dump_program(tfile_ctx_t *tfile, char *fn, unsigned char *dbuf)
 		unsigned type =  val       & 0xf;
 		char *pfx, *sfx;
 
-		/* start or end of statement? */
-		pfx = " ";
-		switch (nleft) {
-		    case 1:   pfx = "}"; break;
-		    case 0:   pfx = "{"; nused = 0; break;
-		    case -1:  nleft = val - 1; break;
+		pfx = off < len ? "|" : ">";
+		if (off < symtab) {
+			/* start or end of statement? */
+			pfx = " ";
+			switch (nleft) {
+			    case 1:   pfx = "}"; break;
+			    case 0:   pfx = "{"; nused = 0; break;
+			    case -1:  nleft = val - 1; break;
+			}
+			nleft--;
 		}
-		nleft--;
 		sink_printf(snp, "%s ", pfx);
 
 		/* offset */
@@ -752,9 +763,11 @@ char *dump_program(tfile_ctx_t *tfile, char *fn, unsigned char *dbuf)
 		} else if (op == 1) {
 			sink_printf(snp, "(str)");
 		} else {
-			if (name)
+			if (name) {
 				(void) print_var_operand(snp, val);
-			else if (type)
+				if (type > 0 && type < 4)
+					sink_printf(snp, "[]");
+			} else if (type)
 				sink_printf(snp, "(@var)");
 			else
 				sink_printf(snp, "     ");
