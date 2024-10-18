@@ -33,12 +33,11 @@
 #include "sink.h"
 #include "outfile.h"
 #include "tfilefmt.h"
+#include "convert.h"
 #include "tsbfile.h"
 #include "tsbprog.h"
 #include "tsbtap.h"
 
-
-#define ACCESS_OSLVL	5000	/* TBD: find actual value */
 
 int is_access = -1;
 int ignore_errs = 0;
@@ -139,7 +138,7 @@ int is_tsb_label(unsigned char *tbuf, int nbytes)
 	    (tbuf[0] >> 2) > 26 &&		/* not a valid id (> Z)? */
 	    memcmp(tbuf+2, "LBTS", 4) == 0) {	/* name as expected? */
 		if (is_access < 0)
-			is_access = BE16(tbuf+16) >= ACCESS_OSLVL;
+			is_access = BE16(tbuf+16) >= SYSLVL_ACCESS;
 		return 1;
 	}
 
@@ -612,17 +611,22 @@ char *prog;
 
 void usage(int ec)
 {
-	fprintf(stderr, "Usage: %s [-aeOv] -f path.tap [-r | -t | -d files... | -x files...]\n",
-		prog);
+	fprintf(stderr, "Usage:  %s [-Av]   -f path.tap {-r | -t}\n", prog);
+	fprintf(stderr, "        %s [-AeOv] -f path.tap {-d | -x} files...\n",
+			prog);
+	fprintf(stderr, "        %s [-Aev]  -f path.tap {-a | -c} out.tap\n",
+			prog);
 	fprintf(stderr, " -f   file in SIMH tape format (required)\n");
 	fprintf(stderr, "operations:\n");
+	fprintf(stderr, " -a   convert tape to Access from 2000F\n");
+	fprintf(stderr, " -c   convert tape to 2000F from Access\n");
 	fprintf(stderr, " -d   show tokens of TSB program \n");
 	fprintf(stderr, " -r   show raw tape block structure\n");
 	fprintf(stderr, " -t   catalog the tape\n");
 	fprintf(stderr, " -x   extract files from tape\n");
 	fprintf(stderr, "modifiers:\n");
-	fprintf(stderr, " -a   ACCESS system tape (default no, or from OS level if found on tape)\n");
-	fprintf(stderr, " -e   ignore certain errors when extracting\n");
+	fprintf(stderr, " -A   tape is from 2000 Access (default no, or from OS level if found on tape)\n");
+	fprintf(stderr, " -e   continue on error (corrupted file / unsupported construct)\n");
 	fprintf(stderr, " -O   extract to stdout (default write to file)\n");
 	fprintf(stderr, " -v   verbose output\n");
 	fprintf(stderr, " -vv  more verbose output\n");
@@ -630,29 +634,43 @@ void usage(int ec)
 }
 
 
-#define OP_R	1
-#define OP_T	2
-#define OP_X	4
-#define OP_D	8
+#define OP_A	1
+#define OP_C	2
+#define OP_R	4
+#define OP_T	8
+#define OP_D	16
+#define OP_X	32
 
 void main(int argc, char **argv)
 {
-	int c, ec;
+	int c, ec, opname;
 	unsigned op = 0;
-	char *ifile = NULL;
-	TAPE *tap;
+	char *ifile = NULL, *ofile = NULL;
+	TAPE *tap, *ot = NULL;
 
 	prog = strrchr(argv[0], '/');
 	prog = prog ? prog+1 : argv[0];
 
-	while ((c = getopt(argc, argv, "aDdef:Ohrtvx")) != -1) {
+	while ((c = getopt(argc, argv, ":Aa:c:Ddef:Ohrtvx")) != -1) {
 		switch (c) {
-		    case 'a':
+		    case 'A':
 			is_access = 1;
 			break;
 
 		    case 'D':
 			debug++;
+			break;
+
+		    case 'a':
+			ofile = optarg;
+			op |= OP_A;
+			opname = c;
+			break;
+
+		    case 'c':
+			ofile = optarg;
+			op |= OP_C;
+			opname = c;
 			break;
 
 		    case 'd':
@@ -677,10 +695,12 @@ void main(int argc, char **argv)
 
 		    case 'r':
 			op |= OP_R;
+			opname = c;
 			break;
 
 		    case 't':
 			op |= OP_T;
+			opname = c;
 			break;
 
 		    case 'v':
@@ -710,11 +730,12 @@ void main(int argc, char **argv)
 	}
 
 	switch (op) {
+	    case OP_A:
+	    case OP_C:
 	    case OP_R:
 	    case OP_T:
 		if (optind < argc) {
-			fprintf(stderr, "files not allowed with -%c\n",
-				op == OP_R ? 'r' : 't');
+			fprintf(stderr, "files not allowed with -%c\n", opname);
 			usage(1);
 		}
 		break;
@@ -729,7 +750,7 @@ void main(int argc, char **argv)
 
 	    default:
 		fprintf(stderr,
-			"must specify exactly one of -d, -r, -t, or -x\n");
+			"must specify exactly one of -a, -c, -d, -r, -t, or -x\n");
 		usage(1);
 	}
 
@@ -742,12 +763,25 @@ void main(int argc, char **argv)
 		exit(1);
 	}
 
+	if (ofile) {
+		if (!(ot = tap_open(ofile, 1))) {
+			perror(ofile);
+			tap_close(tap);
+			exit(1);
+		}
+	}
+
 	switch (op) {
+	    case OP_A:  ec = do_aopt(tap, ot); break;
+	    case OP_C:  ec = do_copt(tap, ot); break;
 	    case OP_D:  ec = do_dopt(tap, argc-optind, argv+optind); break;
 	    case OP_R:  ec = do_ropt(tap); break;
 	    case OP_T:  ec = do_topt(tap); break;
 	    case OP_X:  ec = do_xopt(tap, argc-optind, argv+optind); break;
 	}
+
+	if (ot)
+		tap_close(ot);
 
 	tap_close(tap);
 

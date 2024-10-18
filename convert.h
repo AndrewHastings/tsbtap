@@ -16,24 +16,16 @@
  */
 
 /*
- * Read HP2000 TSB dump tapes in SIMH tape image format.
+ * Routines for converting tapes between 2000F and 2000 Access.
  */
 
-#define dprint(x)	if (debug) printf x
+#ifndef _CONVERT_H
+#define _CONVERT_H 1
 
-#define BE16(bp)	(((bp)[0] << 8) | (bp)[1])
-#define MIN(a, b)	((a) < (b) ? (a) : (b))
+#define STLEN_ACCESS	999	/* TBD */
+#define STLEN_2000F	204	/* TBD */
 
-#define SYSLVL_2000F	3500	/* 2000F option 210/215 */
-#define FEATLVL_2000F	200
-#define SYSLVL_ACCESS	5000	/* Access release A */
-#define FEATLVL_ACCESS	1000
+extern int do_aopt(TAPE *tap, TAPE *ot);
+extern int do_copt(TAPE *tap, TAPE *ot);
 
-extern int is_access;
-extern int ignore_errs;
-extern int debug;
-extern int verbose;
-
-extern int is_tsb_label(unsigned char *tbuf, int nbytes);
-extern void print_direntry(unsigned char *dbuf);
-extern void print_number(SINK *snp, unsigned char *buf);
+#endif /* _CONVERT_H */
