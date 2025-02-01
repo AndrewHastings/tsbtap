@@ -1,5 +1,5 @@
 #
-# Copyright 2024 Andrew B. Hastings. All rights reserved.
+# Copyright 2024, 2025 Andrew B. Hastings. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -14,6 +14,10 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #
+
+# If your build fails because of a missing "asan" library, try:
+#   make clean
+#   make CFLAGS=-Wno-trigraphs
 
 CFLAGS=-g -fsanitize=address -Werror -Wno-trigraphs -Wunused-variable
 
